@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<title>Humanizzer IA Steph — assistant de style et de reformulation</title>
+<style>
+  :root {
+    --fond: #f6f4ef;
+    --carte: #ffffff;
+    --encre: #1f2933;
+    --doux: #5b6770;
+    --accent: #0f766e;
+    --accent-clair: #d9efed;
+    --alerte: #b45309;
+    --alerte-fond: #fef3c7;
+    --erreur: #b91c1c;
+    --bord: #e2ddd2;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--fond); color: var(--encre);
+    font-family: Georgia, "Times New Roman", "Noto Serif", serif;
+    line-height: 1.6;
+  }
+  header {
+    background: var(--carte); border-bottom: 2px solid var(--bord);
+    padding: 18px 24px 0;
+  }
+  header h1 { margin: 0 0 2px; font-size: 1.45rem; letter-spacing: .3px; }
+  header h1 span { color: var(--accent); }
+  header p.sous { margin: 0; color: var(--doux); font-size: .92rem; }
+  nav { margin-top: 14px; display: flex; gap: 4px; flex-wrap: wrap; }
+  nav button {
+    border: 1px solid var(--bord); border-bottom: none; background: #efece4;
+    padding: 9px 16px; cursor: pointer; font-family: inherit; font-size: .95rem;
+    border-radius: 8px 8px 0 0; color: var(--doux);
+  }
+  nav button.actif { background: var(--carte); color: var(--encre); font-weight: bold; border-bottom: 2px solid var(--carte); margin-bottom: -2px; }
+  main { max-width: 1100px; margin: 0 auto; padding: 22px 20px 60px; }
+  section.vue { display: none; }
+  section.vue.actif { display: block; }
+  .carte { background: var(--carte); border: 1px solid var(--bord); border-radius: 10px; padding: 18px; margin-bottom: 18px; }
+  h2 { margin-top: 0; font-size: 1.15rem; }
+  textarea {
+    width: 100%; min-height: 170px; border: 1px solid var(--bord); border-radius: 8px;
+    padding: 12px; font-family: inherit; font-size: 1rem; resize: vertical; background: #fffdf9;
+  }
+  input[type=text] {
+    width: 100%; border: 1px solid var(--bord); border-radius: 8px; padding: 9px 12px;
+    font-family: inherit; font-size: .95rem; background: #fffdf9;
+  }
+  button.action {
+    background: var(--accent); color: #fff; border: none; border-radius: 8px;
+    padding: 10px 18px; font-size: .98rem; cursor: pointer; font-family: inherit; margin-right: 8px; margin-top: 8px;
+  }
+  button.action.secondaire { background: #efece4; color: var(--encre); border: 1px solid var(--bord); }
+  button.action:disabled { opacity: .45; cursor: default; }
+  label.choix { display: inline-block; margin: 4px 14px 4px 0; font-size: .9rem; color: var(--doux); cursor: pointer; }
+  .deux-colonnes { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 800px) { .deux-colonnes { grid-template-columns: 1fr; } }
+  .score {
+    display: inline-block; background: var(--accent-clair); color: var(--accent);
+    border-radius: 999px; padding: 4px 14px; font-weight: bold; font-size: 1.05rem;
+  }
+  .metriques { color: var(--doux); font-size: .9rem; margin-top: 6px; }
+  .journal { max-height: 260px; overflow: auto; font-size: .9rem; }
+  .journal div { padding: 6px 8px; border-bottom: 1px dashed var(--bord); }
+  .journal b { color: var(--accent); }
+  .avert { background: var(--alerte-fond); border-left: 4px solid var(--alerte); padding: 10px 12px; border-radius: 0 8px 8px 0; font-size: .92rem; margin: 10px 0; }
+  .erreur-msg { background: #fee2e2; border-left: 4px solid var(--erreur); padding: 10px 12px; border-radius: 0 8px 8px 0; font-size: .92rem; }
+  table { width: 100%; border-collapse: collapse; font-size: .92rem; }
+  th, td { text-align: left; padding: 7px 9px; border-bottom: 1px solid var(--bord); vertical-align: top; }
+  th { background: #efece4; }
+  .badge { display: inline-block; border-radius: 999px; padding: 1px 10px; font-size: .8rem; }
+  .badge.ok { background: var(--accent-clair); color: var(--accent); }
+  .badge.ko { background: #fee2e2; color: var(--erreur); }
+  .badge.atten { background: var(--alerte-fond); color: var(--alerte); }
+  .variante { border: 1px solid var(--bord); border-radius: 8px; padding: 10px 12px; margin: 8px 0; background: #fffdf9; }
+  .variante .type { font-size: .82rem; color: var(--doux); }
+  .variante button { float: right; }
+  pre.liste { white-space: pre-wrap; font-family: inherit; margin: 0; }
+  .note { font-size: .88rem; color: var(--doux); }
+  ol.guide li { margin-bottom: 10px; }
+  footer { max-width: 1100px; margin: 0 auto; padding: 0 20px 40px; font-size: .85rem; color: var(--doux); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Humanizzer IA <span>Steph</span></h1>
+  <p class="sous">Assistant de style et de reformulation académique — fonctionne entièrement dans votre navigateur, sans API, sans compte, hors ligne.</p>
+  <nav>
+    <button type="button" data-vue="humaniser" class="actif">1 · Humaniser</button>
+    <button type="button" data-vue="reformuler">2 · Reformuler</button>
+    <button type="button" data-vue="analyser">3 · Analyser</button>
+    <button type="button" data-vue="heberger">Hébergement gratuit</button>
+    <button type="button" id="nav-tests">Tests (54)</button>
+  </nav>
+</header>
+
+<main>
+
+<!-- ==================== MODE 1 : HUMANISER ==================== -->
+<section id="vue-humaniser" class="vue actif">
+  <div class="carte">
+    <h2>Texte à corriger</h2>
+    <p class="note">Collez votre brouillon. L'outil applique vos règles de style (PARTIE 1 et 2) : chaque modification est listée et reste sous votre contrôle.</p>
+    <textarea id="hz-entree" placeholder="Collez ici le texte à retravailler…"></textarea>
+    <div style="margin-top:10px">
+      <label class="choix"><input type="checkbox" id="cat-banned" checked> Mots interdits (1.3)</label>
+      <label class="choix"><input type="checkbox" id="cat-transitions" checked> Transitions (1.2)</label>
+      <label class="choix"><input type="checkbox" id="cat-periphrases" checked> Périphrases (1.4)</label>
+      <label class="choix"><input type="checkbox" id="cat-chatbot" checked> Formules chatbot (1.5)</label>
+      <label class="choix"><input type="checkbox" id="cat-participes" checked> Participes (2.3)</label>
+      <label class="choix"><input type="checkbox" id="cat-emdash" checked> Tirets cadratins (2.6)</label>
+      <label class="choix"><input type="checkbox" id="cat-arrow" checked> Flèches (2.7)</label>
+      <label class="choix"><input type="checkbox" id="cat-register" checked> Registre lourd (2.10)</label>
+    </div>
+    <div>
+      <button type="button" class="action" id="hz-lancer">Appliquer mes règles</button>
+      <button type="button" class="action secondaire" id="hz-annuler" disabled>Annuler la dernière</button>
+      <button type="button" class="action secondaire" id="hz-reset">Réinitialiser</button>
+    </div>
+  </div>
+
+  <div id="hz-resultats" style="display:none">
+    <div class="deux-colonnes">
+      <div class="carte">
+        <h2>Texte corrigé</h2>
+        <textarea id="hz-sortie" style="min-height:220px"></textarea>
+        <div>
+          <button type="button" class="action secondaire" id="hz-copier">Copier</button>
+          <button type="button" class="action secondaire" id="hz-telecharger">Télécharger (.txt)</button>
+        </div>
+        <p style="margin-bottom:0"><span class="score" id="hz-score"></span></p>
+        <p class="metriques" id="hz-metriques"></p>
+        <p class="note">Indice de conformité à vos règles de style (PARTIE 1–2). Cet indice ne mesure aucun détecteur et n'en promet rien.</p>
+      </div>
+      <div class="carte">
+        <h2>Journal des modifications</h2>
+        <div class="journal" id="hz-journal"></div>
+        <div id="hz-restants" style="margin-top:10px"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== MODE 2 : REFORMULER ==================== -->
+<section id="vue-reformuler" class="vue">
+  <div class="carte">
+    <h2>Reformuler une idée tirée d'une source</h2>
+    <p class="note">Compétence « reformuler » : change la construction des phrases (pas seulement les mots), préserve le sens scientifique, contrôle la proximité avec la source et signale le patchwriting. Ne promet aucun score sur un détecteur.</p>
+    <p><b>Extrait de la source à reformuler</b> (l'idée de l'auteur, citée mot à mot si possible)</p>
+    <textarea id="rf-entree" placeholder="Collez l'extrait de la source…"></textarea>
+    <div class="deux-colonnes" style="margin-top:10px">
+      <div>
+        <p><b>Référence de la source</b></p>
+        <input type="text" id="rf-source" placeholder="Ex. : Howard, 1993, p. 233">
+      </div>
+      <div>
+        <p><b>Termes à préserver</b> (séparés par des virgules)</p>
+        <input type="text" id="rf-termes" placeholder="Ex. : perplexité, LLM, classifieur">
+      </div>
+    </div>
+    <button type="button" class="action" id="rf-lancer">Proposer des reformulations</button>
+  </div>
+  <div id="rf-resultats" style="display:none">
+    <div id="rf-alertes"></div>
+    <div class="carte">
+      <h2>Phrase par phrase</h2>
+      <div id="rf-phrases"></div>
+    </div>
+    <div class="carte">
+      <h2>Contrôle « charpente » (patchwriting)</h2>
+      <p class="note">Collez l'extrait original de la source pour mesurer l'indice de proximité (Jaccard) entre votre reformulation et l'original.</p>
+      <textarea id="rf-extrait" style="min-height:90px" placeholder="Extrait original de la source…"></textarea>
+      <button type="button" class="action secondaire" id="rf-verifier">Vérifier la proximité</button>
+      <div id="rf-patch" style="margin-top:10px"></div>
+    </div>
+    <div class="carte">
+      <h2>Texte recomposé</h2>
+      <textarea id="rf-sortie" style="min-height:160px" readonly></textarea>
+      <button type="button" class="action secondaire" id="rf-copier">Copier</button>
+      <p class="note">Rappel : la version finale doit être relue et réécrite dans vos mots. L'outil prépare le terrain, il ne rédige pas à votre place.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== MODE 3 : ANALYSER ==================== -->
+<section id="vue-analyser" class="vue">
+  <div class="carte">
+    <h2>Analyse stylistique complète</h2>
+    <p class="note">Audite toutes vos règles (PARTIE 1, 2 et 3), y compris celles qui ne se corrigent pas automatiquement : clichés d'intro, sources vagues, triades, séries de phrases courtes, listes, gras.</p>
+    <textarea id="an-entree" placeholder="Collez ici le texte à auditer…"></textarea>
+    <button type="button" class="action" id="an-lancer">Analyser</button>
+  </div>
+  <div id="an-resultats" style="display:none">
+    <div class="carte">
+      <p style="margin-bottom:4px"><span class="score" id="an-score"></span></p>
+      <p class="metriques" id="an-metriques"></p>
+      <p class="note">Indice de conformité à vos règles de style. Aucun lien avec un détecteur d'IA.</p>
+    </div>
+    <div class="carte">
+      <h2>Points relevés</h2>
+      <table id="an-table"><thead><tr><th>Règle</th><th>Occurrences</th><th>Correction</th></tr></thead><tbody></tbody></table>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== GUIDE HEBERGEMENT ==================== -->
+<section id="vue-heberger" class="vue">
+  <div class="carte">
+    <h2>Héberger l'application gratuitement, sans API</h2>
+    <p>L'application est un site statique : trois fichiers (HTML, CSS, JS) sans serveur ni base de données. Tout le calcul se fait dans le navigateur du visiteur. Résultat : hébergement gratuit chez plusieurs hébergeurs, aucune clé API, aucun coût, même hors ligne.</p>
+    <h2>Option A — GitHub Pages (recommandée, permanente)</h2>
+    <ol class="guide">
+      <li>Créez un compte gratuit sur <b>github.com</b>, puis un nouveau dépôt public (par ex. <i>humanizzer</i>).</li>
+      <li>Uploadez les 5 fichiers : <b>index.html</b>, <b>engine.js</b>, <b>app.js</b>, <b>tests.html</b>, <b>tests.js</b> (bouton « Add file » puis « Upload files »).</li>
+      <li>Allez dans <i>Settings → Pages</i>. Sous « Source », choisissez « Deploy from a branch », branche <b>main</b>, dossier <b>/ (root)</b>, puis Save.</li>
+      <li>Attendez 1 à 2 minutes : l'application est en ligne sur <i>https://votre-nom.github.io/humanizzer/</i>. Gratuit à vie, HTTPS inclus.</li>
+    </ol>
+    <h2>Option B — Netlify Drop (la plus rapide)</h2>
+    <ol class="guide">
+      <li>Mettez les 5 fichiers dans un dossier, compressez-le en ZIP.</li>
+      <li>Allez sur <b>app.netlify.com/drop</b> et glissez-déposez le ZIP.</li>
+      <li>Le site est en ligne en 30 secondes sur une URL fournie. Créez un compte gratuit (pas de carte bancaire) pour garder le site de façon permanente.</li>
+    </ol>
+    <h2>Option C — Vercel</h2>
+    <ol class="guide">
+      <li>Créez un compte gratuit sur <b>vercel.com</b> (connexion GitHub possible).</li>
+      <li>« Add New → Project », importez le dépôt GitHub créé à l'option A, cliquez Deploy.</li>
+      <li>Site en ligne sur <i>https://humanizzer-….vercel.app</i>.</li>
+    </ol>
+    <div class="avert">Choisissez UNE option. GitHub Pages est la plus stable pour un usage long terme ; Netlify Drop est la plus rapide pour tester aujourd'hui.</div>
+    <h2>Utilisation hors ligne</h2>
+    <p>Ouvrez simplement <b>index.html</b> en double-cliquant dessus : l'application fonctionne sans internet, les textes ne quittent jamais votre ordinateur.</p>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <p><b>Limite assumée :</b> cet outil applique des règles de style et aide à reformuler proprement une source. Il ne fait aucune promesse de résultat face à un détecteur d'IA (Compilatio, Turnitin ou autre), car aucun tel chiffre n'est vérifiable de façon indépendante. Pour un travail académique, la protection réelle est de réécrire vous-même, de citer vos sources et de pouvoir expliquer chaque phrase.</p>
+</footer>
+
+<script src="engine.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

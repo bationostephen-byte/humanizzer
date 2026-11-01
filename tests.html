@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Humanizzer IA Steph — suite de tests (54)</title>
+<style>
+  body { margin: 0; background: #f6f4ef; color: #1f2933; font-family: Georgia, "Times New Roman", serif; line-height: 1.6; }
+  main { max-width: 900px; margin: 0 auto; padding: 24px 20px 60px; }
+  h1 { font-size: 1.3rem; }
+  .resume { font-size: 1.1rem; font-weight: bold; margin: 14px 0; padding: 12px 16px; border-radius: 10px; }
+  .tout-ok { background: #d9efed; color: #0f766e; }
+  .des-echecs { background: #fee2e2; color: #b91c1c; }
+  table { width: 100%; border-collapse: collapse; font-size: .9rem; background: #fff; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid #e2ddd2; vertical-align: top; }
+  th { background: #efece4; }
+  .ok { color: #0f766e; font-weight: bold; }
+  .ko { color: #b91c1c; font-weight: bold; }
+  .details { color: #5b6770; font-size: .85rem; }
+  a { color: #0f766e; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Suite de tests — Humanizzer IA Steph (v1.1.0)</h1>
+  <p>Chaque règle de style, le pipeline complet, la compétence « reformuler » et le contrôle de patchwriting sont vérifiés automatiquement. Cette page peut être ouverte à tout moment pour vérifier que l'application fonctionne après une modification.</p>
+  <p><a href="index.html">← Retour à l'application</a></p>
+  <div id="resume" class="resume"></div>
+  <table>
+    <thead><tr><th>#</th><th>État</th><th>Test</th><th>Détails</th></tr></thead>
+    <tbody id="corps"></tbody>
+  </table>
+</main>
+<script src="engine.js"></script>
+<script src="tests.js"></script>
+<script>
+  (function () {
+    'use strict';
+    const results = HumanizzerTests.runTests(window.Humanizzer);
+    const nbOk = results.filter((r) => r.pass).length;
+    const resume = document.getElementById('resume');
+    resume.className = 'resume ' + (nbOk === results.length ? 'tout-ok' : 'des-echecs');
+    resume.textContent = nbOk + ' / ' + results.length + ' tests réussis' +
+      (nbOk === results.length ? ' — tout fonctionne.' : ' — des corrections sont nécessaires.');
+
+    const corps = document.getElementById('corps');
+    results.forEach((r, i) => {
+      const tr = document.createElement('tr');
+
+      const tdIndex = document.createElement('td');
+      tdIndex.textContent = String(i + 1);
+
+      const tdStatus = document.createElement('td');
+      tdStatus.className = r.pass ? 'ok' : 'ko';
+      tdStatus.textContent = r.pass ? 'OK' : 'ÉCHEC';
+
+      const tdName = document.createElement('td');
+      tdName.textContent = r.name;
+
+      const tdDetails = document.createElement('td');
+      tdDetails.className = 'details';
+      tdDetails.textContent = r.details || '';
+
+      tr.appendChild(tdIndex);
+      tr.appendChild(tdStatus);
+      tr.appendChild(tdName);
+      tr.appendChild(tdDetails);
+      corps.appendChild(tr);
+    });
+  })();
+</script>
+</body>
+</html>

@@ -179,7 +179,7 @@
             const prev = items[item.i - 1];
             if (prev && prev.chosen && prev.chosen.fusion) prev.chosen = null;
           }
-          items.forEach((it) => it.variants.forEach((x) => { x.btn.textContent = it.chosen === x ? 'Utilisé ✓' : 'Utiliser'; }));
+          rafraichirBoutons();
           composer();
         });
         ligne.innerHTML = '<span class="type">Variante ' + (k + 1) + ' · ' + echap(v.type) + '</span> ' + badges.join(' ');
@@ -199,6 +199,21 @@
     if (!dernierResultat) return;
     $('rf-sortie').value = H.compose(dernierResultat.items);
   }
+
+  function rafraichirBoutons() {
+    if (!dernierResultat) return;
+    dernierResultat.items.forEach((it) => it.variants.forEach((x) => {
+      if (x.btn) x.btn.textContent = it.chosen === x ? 'Utilisé ✓' : 'Utiliser';
+    }));
+  }
+
+  // Paragraphe entier : première variante qui garde chiffres et termes, sans fusion (évite les conflits)
+  on('rf-toutes', () => {
+    if (!dernierResultat) return;
+    dernierResultat.items.forEach((it) => { it.chosen = it.variants.find((x) => x.ok && !x.fusion) || null; });
+    rafraichirBoutons();
+    composer();
+  });
 
   on('rf-verifier', () => {
     const extrait = $('rf-extrait').value;

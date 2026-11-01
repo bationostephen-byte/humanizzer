@@ -13,7 +13,7 @@
 })(typeof self !== 'undefined' ? self : globalThis, function () {
   'use strict';
 
-  const VERSION = '1.2.0';
+  const VERSION = '1.3.0';
 
   /* Entrée commune : chaîne NFC (accents décomposés des copier-coller PDF/macOS) et bornée */
   const MAX_CHARS = 300000;
@@ -392,6 +392,69 @@
     return u ? inter / u : 0;
   }
 
+  /* ---- transformations de structure sûres : chacune a des préconditions strictes ---- */
+  // Proposition « complexe » (subordonnée, relative, coordination de propositions) : on s'abstient
+  const hasComplexClause = (t) =>
+    /\b(?:que|qui|dont|lorsque|quand|si|puisque|parce|comme|tandis)\b|qu['’]|(?:^|\s)où(?:\s|$)|,\s+(?:mais|et|ou|donc|car|or|cependant|toutefois)\b/i.test(t);
+  const hasAmbiguousAttach = (t) => /\b(?:permet|permettent|afin|pour)\b|\b(?:de\s+|d['’])\p{L}{3,}(?:er|ir|re)\b/iu.test(t);
+  const hasNegation = (t) => /\b(?:ne\b|n['’])/i.test(t);
+
+  const PP_PREP = "(?:après|avant|pendant|durant|depuis|lors (?:de|du|des)|au cours (?:de|du|des)|à la suite (?:de|du|des)|en raison (?:de|du|des)|grâce (?:à|au|aux)|dans le cadre (?:de|du|des))";
+  const PP_COMP = "((?:[^\\s,;:()]+\\s+){0,5}[^\\s,;:()]+)";   // complément : 1 à 6 mots, sans ponctuation interne
+  const PP_END_RE = new RegExp("^(.+)\\s(" + PP_PREP + ")\\s+" + PP_COMP + "\\.$", 'i');
+  const YEAR_END_RE = /^(.+)\s(en (?:19|20)\d{2})\.$/;
+  const REPORT_VERBS = "(?:révèle|révèlent|montre|montrent|indique|indiquent|démontre|démontrent|confirme|confirment|suggère|suggèrent|prouve|prouvent|établit|établissent)";
+  const QUE_PP_RE = new RegExp("^(.+?\\s" + REPORT_VERBS + ")\\s+que\\s+(.+)\\s(" + PP_PREP + ")\\s+" + PP_COMP + "\\.$", 'i');
+
+  // « Après X, <phrase>. »  ou, dans « L'étude montre que … après X », « L'étude montre qu'après X, … »
+  function frontAdverbial(s) {
+    let m = QUE_PP_RE.exec(s);
+    if (m) {
+      const head = m[1], rest = m[2], prep = m[3], comp = m[4];
+      if (hasNegation(head) || hasComplexClause(rest) || hasAmbiguousAttach(rest)) return null;
+      return head + ' ' + (/^[aeiouyàâäéèêëîïôöùûüh]/i.test(prep) ? "qu'" : 'que ') + prep + ' ' + comp + ', ' + rest + '.';
+    }
+    let first, pp;
+    m = PP_END_RE.exec(s);
+    if (m) { first = m[1]; pp = m[2] + ' ' + m[3]; }
+    else {
+      m = YEAR_END_RE.exec(s);
+      if (!m) return null;
+      first = m[1]; pp = m[2];
+    }
+    if (hasComplexClause(first) || hasAmbiguousAttach(first) || countWords(first) < 5) return null;
+    const low = decapSafe(first);            // jamais de minuscule sur un nom propre ou un acronyme
+    return low ? cap1(pp) + ', ' + low + '.' : null;
+  }
+
+  // « L'analyse révèle que Y » -> « Il ressort de l'analyse que Y » / « D'après l'analyse, Y »
+  // Sujet limité aux sources d'information (analyse, étude, résultats…), jamais une personne ; pas de négation.
+  const SRC_NOUNS = "(?:analyses?|études?|enquêtes?|recherches?|expériences?|expérimentations?|observations?|mesures?|résultats?|données?|essais?|tests?|travaux|examens?|suivis?|bilans?|évaluations?|comparaisons?|dosages?|criblages?)";
+  const SRC_RE = new RegExp("^(L['’]|(?:Le|La|Les|Cette|Cet|Ces|Notre|Nos|Son|Sa|Ses)\\s+)(" + SRC_NOUNS + ")\\b([^,;:()]*?)\\s+(?:révèle|révèlent|montre|montrent|indique|indiquent|met(?:tent)? en évidence)\\s+(que\\s+|qu['’])(.+)$");
+  const GEN = { Le: 'du', La: 'de la', Les: 'des', Cette: 'de cette', Cet: 'de cet', Ces: 'de ces', Notre: 'de notre', Nos: 'de nos', Son: 'de son', Sa: 'de sa', Ses: 'de ses' };
+  function reportedSource(s) {
+    const m = SRC_RE.exec(s);
+    if (!m) return null;
+    const det = m[1], noun = m[2], np = m[3], que = m[4], rest = m[5];
+    if (hasNegation(np) || /\b(?:que|qui|dont)\b/i.test(np) || countWords(np) > 8) return null;
+    const dlow = det.charAt(0).toLowerCase() + det.slice(1);
+    const gen = /^L['’]/.test(det) ? 'de ' + dlow : GEN[det.trim()] + ' ';
+    return {
+      a: 'Il ressort ' + gen + noun + np + ' ' + que + rest,
+      b: "D'après " + dlow + noun + np + ', ' + rest,
+    };
+  }
+
+  // « Le test permet de Y » -> « Avec le test, on peut Y »
+  const PERM_RE = /^(L['’]|(?:Le|La|Les|Cette|Cet|Ces)\s+)(.+?)\s+(?:permet|permettent)\s+(?:de\s+|d['’])(.+)$/;
+  function permetDe(s) {
+    const m = PERM_RE.exec(s);
+    if (!m) return null;
+    const np = m[2];
+    if (/[,;:()]/.test(np) || hasNegation(np) || /\b(?:que|qui|dont)\b/i.test(np) || countWords(np) > 8) return null;
+    return 'Avec ' + m[1].charAt(0).toLowerCase() + m[1].slice(1) + np + ', on peut ' + m[3];
+  }
+
   function variantsFor(s, globalMust) {
     const localMust = tokensInSegment(s, globalMust);
     const out = [];
@@ -427,6 +490,18 @@
     let v3 = s;
     for (const [re, to] of IMP) v3 = v3.replace(re, to);
     if (v3 !== s) push(v3, 'Tournure impersonnelle reformulée');
+    // 4) complément circonstanciel final placé en tête
+    const front = frontAdverbial(s);
+    if (front) push(front, 'Complément circonstanciel déplacé en tête');
+    // 5) sujet « source d'information » + verbe de constat
+    const rs = reportedSource(s);
+    if (rs) {
+      push(rs.a, 'Tournure « Il ressort de … que »');
+      push(rs.b, 'Tournure « D’après … , »');
+    }
+    // 6) « permet de »
+    const pm = permetDe(s);
+    if (pm) push(pm, 'Sujet remplacé par « Avec … , on peut »');
     return out;
   }
 
@@ -467,13 +542,10 @@
     }
     const warns = [];
     if (!source || !source.trim()) {
-      warns.push("Aucune source indiquée : une idée tirée d'un article, d'un livre ou d'un cours doit être citée (auteur, année, page). Reformuler sans citer, c'est s'approprier l'idée.");
+      warns.push("Aucune source indiquée (facultatif ici) : si l'idée vient d'un article, d'un livre ou d'un cours, citez-la (auteur, année, page) dans votre texte final.");
     }
     if (/«[^»]{10,}»/.test(t) && !/\([^)]*(?:\d{4}|al\.)[^)]*\)/.test(t)) {
       warns.push('Des guillemets « … » sont présents sans repère de citation (Auteur, année). Une citation mot à mot exige les guillemets ET la référence exacte.');
-    }
-    if (must.length === 0) {
-      warns.push("Aucun chiffre ni terme technique détecté : listez dans « termes à préserver » le vocabulaire scientifique qui ne doit pas bouger.");
     }
     return { must, items, warns };
   }

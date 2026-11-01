@@ -152,15 +152,16 @@
   <div class="carte">
     <h2>Reformuler une idée tirée d'une source</h2>
     <p class="note">Compétence « reformuler » : change la construction des phrases (pas seulement les mots), préserve le sens scientifique, contrôle la proximité avec la source et signale le patchwriting. Ne promet aucun score sur un détecteur.</p>
+    <p class="note"><b>Aucun champ n'est obligatoire :</b> collez une phrase ou un paragraphe, puis cliquez sur « Proposer des reformulations ». Les chiffres sont protégés automatiquement.</p>
     <p><b>Extrait de la source à reformuler</b> (l'idée de l'auteur, citée mot à mot si possible)</p>
     <textarea id="rf-entree" placeholder="Collez l'extrait de la source…"></textarea>
     <div class="deux-colonnes" style="margin-top:10px">
       <div>
-        <p><b>Référence de la source</b></p>
+        <p><b>Référence de la source</b> (facultatif)</p>
         <input type="text" id="rf-source" placeholder="Ex. : Howard, 1993, p. 233">
       </div>
       <div>
-        <p><b>Termes à préserver</b> (séparés par des virgules)</p>
+        <p><b>Termes à préserver</b> (facultatif ; séparés par des virgules)</p>
         <input type="text" id="rf-termes" placeholder="Ex. : perplexité, LLM, classifieur">
       </div>
     </div>
@@ -170,6 +171,8 @@
     <div id="rf-alertes"></div>
     <div class="carte">
       <h2>Phrase par phrase</h2>
+      <button type="button" class="action secondaire" id="rf-toutes">Appliquer la 1re variante à chaque phrase</button>
+      <p class="note">Ce bouton remplace vos choix actuels. Relisez ensuite le texte recomposé : chaque variante garde vos chiffres, mais vérifiez que le sens reste exact.</p>
       <div id="rf-phrases"></div>
     </div>
     <div class="carte">

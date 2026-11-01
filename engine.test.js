@@ -185,3 +185,39 @@ test('patchCheck : reformulation profonde → bonne distance (pas de faux positi
   const r = H.patchCheck(SRC, 'Les citadins achètent autrement depuis que la vente par internet se développe durablement.');
   assert.ok(r.distance < 0.4, 'distance = ' + r.distance);
 });
+
+/* ---------- 6. v1.3 : transformations de structure sûres, champs facultatifs ---------- */
+const PHRASE = "L'analyse biochimique révèle que la concentration en métaux lourds a baissé de 45 % dans les échantillons de sol minier après traitement.";
+test('Reformuler v1.3 : aucun champ obligatoire, la phrase reçoit 3 variantes correctes', () => {
+  const r = H.reformuler(PHRASE, '', '');
+  const t = r.items[0].variants.map((v) => v.text);
+  assert.deepEqual(t, [
+    "L'analyse biochimique révèle qu'après traitement, la concentration en métaux lourds a baissé de 45 % dans les échantillons de sol minier.",
+    "Il ressort de l'analyse biochimique que la concentration en métaux lourds a baissé de 45 % dans les échantillons de sol minier après traitement.",
+    "D'après l'analyse biochimique, la concentration en métaux lourds a baissé de 45 % dans les échantillons de sol minier après traitement.",
+  ]);
+  assert.ok(r.items[0].variants.every((v) => v.ok), 'le « 45 % » doit être conservé');
+  assert.equal(r.warns.length, 1);                      // seulement le rappel de source, plus d'alerte « termes »
+  assert.ok(/Aucune source/.test(r.warns[0]) && /facultatif/.test(r.warns[0]));
+});
+test('Reformuler v1.3 : avec ou sans les champs facultatifs, mêmes variantes', () => {
+  const a = H.reformuler(PHRASE, 'Compaore (2025)', 'métaux lourds, minier').items[0].variants.map((v) => v.text);
+  const b = H.reformuler(PHRASE, '', '').items[0].variants.map((v) => v.text);
+  assert.deepEqual(a, b);
+});
+test('Reformuler v1.3 : tournures « permet de » et complément temporel en tête', () => {
+  assert.deepEqual(textes('Les feuilles de Cassia obtusifolia accumulent le plomb dans les racines après trois semaines.'),
+    ['Après trois semaines, les feuilles de Cassia obtusifolia accumulent le plomb dans les racines.']);
+  assert.ok(textes('La chromatographie sur couche mince permet de séparer les extraits, mais la reproductibilité reste limitée.')
+    .includes('Avec la chromatographie sur couche mince, on peut séparer les extraits, mais la reproductibilité reste limitée.'));
+});
+test('Reformuler v1.3 garde-fous : pas de variante qui change le sens', () => {
+  // « dans … » se rapporte à « gènes impliqués », pas au verbe : ne jamais le déplacer en tête
+  assert.ok(!textes('Le séquençage permet d’identifier les gènes impliqués dans la tolérance au cadmium.').some((t) => /^Dans /.test(t)));
+  assert.deepEqual(textes("L'analyse ne révèle que trois métaux dans le sol après traitement."), []);       // « ne … que » restrictif
+  assert.deepEqual(textes("L'analyse ne montre pas que la concentration a baissé après traitement."), []);    // négation
+  assert.deepEqual(textes('Pasteur a observé une baisse nette du titre après traitement thermique.'), []);    // nom propre
+  assert.deepEqual(textes('Le patient qui reçoit la dose présente une baisse après traitement.'), []);         // relative
+  assert.deepEqual(textes('Après traitement, le taux baisse.'), []);                                           // déjà en tête
+  assert.ok(!textes('Les chercheurs montrent que la dose augmente.').some((t) => /^Il ressort/.test(t)));      // sujet humain
+});

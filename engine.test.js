@@ -221,3 +221,198 @@ test('Reformuler v1.3 garde-fous : pas de variante qui change le sens', () => {
   assert.deepEqual(textes('Après traitement, le taux baisse.'), []);                                           // déjà en tête
   assert.ok(!textes('Les chercheurs montrent que la dose augmente.').some((t) => /^Il ressort/.test(t)));      // sujet humain
 });
+
+/* ---------- 7. v1.4 : relecture granulaire, qualité, suggestions, voix passive ---------- */
+const actives = (s) => H.reformuler(s, '', '').items[0].variants.filter((v) => /passive/.test(v.type)).map((v) => v.text);
+test('Voix passive → active : agent humain ou collectif, temps et accords corrects', () => {
+  assert.deepEqual(actives('Les extraits sont analysés par les chercheurs.'), ['Les chercheurs analysent les extraits.']);
+  assert.deepEqual(actives("La concentration a été mesurée par l'équipe après traitement."), ["L'équipe a mesuré la concentration après traitement."]);
+  assert.deepEqual(actives('Le protocole sera appliqué par le laboratoire.'), ['Le laboratoire appliquera le protocole.']);
+  assert.deepEqual(actives('Les données ont été collectées par les participants.'), ['Les participants ont collecté les données.']);
+  assert.deepEqual(actives('Le plomb était dosé par les techniciens.'), ['Les techniciens dosaient le plomb.']);
+  assert.deepEqual(actives("L'échantillon est prélevé par les médecins."), ["Les médecins prélèvent l'échantillon."]);   // prélevé → prélève (è)
+  assert.deepEqual(actives("Les protéines étaient mélangées par l'équipe."), ["L'équipe mélangeait les protéines."]);       // -ger → -geait
+  assert.deepEqual(actives("L'étude a été menée par l'équipe."), ["L'équipe a mené l'étude."]);
+  assert.deepEqual(actives('Les cellules sont considérées par les experts.'), ['Les experts considèrent les cellules.']);   // considéré → considère
+});
+test('Voix passive → active garde-fous : « par » + moyen, négation, participe irrégulier', () => {
+  assert.deepEqual(actives('Les extraits sont obtenus par filtration.'), []);               // moyen sans déterminant
+  assert.deepEqual(actives('Les extraits sont obtenus par la filtration.'), []);            // moyen : « La filtration obtient les extraits » serait faux
+  assert.deepEqual(actives('Les patients étaient suivis par les médecins.'), []);           // participe en -i : hors périmètre
+  assert.deepEqual(actives("Le test n'est pas validé par les experts."), []);               // négation
+  assert.deepEqual(actives('Les résultats sont discutés par les auteurs et par les experts.'), []);
+});
+
+test('Relecture : accepter tout = humanize(), refuser tout = texte d’origine (corpus varié)', () => {
+  const corpus = [
+    "L'essentiel est crucial. Bien sûr ! Le modèle — le plus large du réseau — grandit, soulignant une tendance. De plus, le coût baisse. Des points cruciaux restent ouverts.",
+    'Voici un aperçu : le taux est de 43 %. Pages 10–20. A -> B.',
+    'De plus, il est crucial de noter. Par ailleurs, c’est essentiel ! Bien sûr !',
+    '', ' ', 'Un texte propre sans rien à corriger.',
+    'Premier paragraphe crucial.\n\nSecond paragraphe — avec incise — et suite.',
+  ];
+  for (const c of corpus) {
+    const rv = H.review(c);
+    assert.ok(rv.segments, 'segments manquants pour : ' + JSON.stringify(c));
+    assert.equal(H.assemble(rv.segments), rv.text);
+    assert.equal(H.assemble(rv.segments, rv.segments.map(() => false)).replace(/\s+/g, ' '), c.trim().replace(/\s+/g, ' '));
+  }
+});
+test('Relecture : l’incise « — … — » est UNE modification ; refuser une modification n’affecte pas les autres', () => {
+  const t = "Le modèle — le plus large du réseau — grandit. Des points cruciaux restent ouverts.";
+  const rv = H.review(t);
+  const chg = rv.segments.map((s, i) => [s, i]).filter(([s]) => !s.same);
+  assert.equal(chg.length, 2);                                         // l'incise et « cruciaux », pas davantage
+  const acc = rv.segments.map(() => true);
+  acc[chg.find(([s]) => /—/.test(s.orig))[1]] = false;                 // je refuse l'incise seulement
+  assert.equal(H.assemble(rv.segments, acc), 'Le modèle — le plus large du réseau — grandit. Des points décisifs restent ouverts.');
+});
+test('Relecture : les modifications séparées d’une phrase sont indépendantes', () => {
+  const rv = H.review("Une approche cruciale. Une phrase neutre. Un résultat essentiel.");
+  const chg = rv.segments.filter((s) => !s.same);
+  assert.equal(chg.length, 2);
+  assert.deepEqual(chg.map((s) => s.label), ['Mot interdit remplacé (1.3)', 'Mot interdit remplacé (1.3)']);
+});
+
+test('Qualité : Flesch adapté au français = 207 − 1,015·mots/phrase − 73,6·syllabes/mot', () => {
+  const q = H.quality('Le chat dort. Il mange. Nous lisons.');
+  const syl = ['le', 'chat', 'dort', 'il', 'mange', 'nous', 'lisons'].reduce((a, w) => a + (w === 'lisons' ? 2 : 1), 0);  // mange = 1 (e muet)
+  const attendu = 207 - 1.015 * (7 / 3) - 73.6 * (syl / 7);
+  assert.ok(Math.abs(q.readability.score - attendu) < 0.2, q.readability.score + ' vs ' + attendu.toFixed(1));
+  assert.equal(q.readability.reliable, false);                        // moins de 100 mots : signalé
+});
+test('Qualité : plus les mots sont longs, plus le score de lisibilité baisse', () => {
+  const simple = H.quality('Le chat dort sur le lit. Le chien court dans le jardin. Il fait beau et chaud ce jour.');
+  const savant = H.quality('La chromatographie bidimensionnelle différencie spectrophotométriquement des métabolites secondaires. L’interprétation phytochimique nécessite considérablement d’expérimentations complémentaires.');
+  assert.ok(simple.readability.score > savant.readability.score + 30);
+});
+test('Qualité : MATTR — un texte qui se répète est moins riche qu’un texte varié, quelle que soit la longueur', () => {
+  const repete = ('le test est bon ' ).repeat(60);
+  const vocab = [];
+  for (let i = 0; i < 240; i++) vocab.push('mot' + String.fromCharCode(97 + (i % 26)) + String.fromCharCode(97 + Math.floor(i / 26)));  // lettres seules : « motab », « motbb »…
+  const varie = vocab.join(' ');
+  assert.ok(H.quality(repete).lexical.mattr < 0.15);
+  assert.equal(H.quality(varie).lexical.mattr, 1);
+  // insensible à la longueur : un texte périodique garde le même MATTR qu'il soit court ou long
+  const court = H.quality(('a b c d e f g h ').repeat(15)).lexical.mattr;
+  const long = H.quality(('a b c d e f g h ').repeat(60)).lexical.mattr;
+  assert.ok(Math.abs(court - long) < 0.01, court + ' vs ' + long);
+});
+test('Qualité : mots répétés (stopwords exclus, pluriels regroupés) et pistes seulement pour les mots listés', () => {
+  const q = H.quality('Le résultat est clair. Les résultats confirment le résultat. Cette plante accumule le zinc. La plante pousse. Une plante résiste. Le zinc est dosé.');
+  const mots = q.repeated.map((x) => x.word + ':' + x.count);
+  assert.ok(mots.includes('résultat:3') || mots.includes('résultats:3'), mots.join());
+  const rep = q.repeated.find((x) => /^résultat/.test(x.word));
+  assert.equal(rep.hint.lemma, 'résultat');
+  const plante = q.repeated.find((x) => x.word === 'plante');
+  assert.equal(plante.count, 3);
+  assert.equal(plante.hint, null);                                    // « plante » est un terme de domaine : aucune piste de synonyme
+  assert.ok(!q.repeated.some((x) => ['les', 'cette', 'une', 'est'].includes(x.word)));
+});
+test('Qualité : phrases de 40 mots ou plus repérées', () => {
+  const longue = 'mot '.repeat(45).trim() + '.';
+  assert.equal(H.quality(longue + ' Courte.').longSentences.length, 1);
+  assert.equal(H.quality('Courte phrase ici. Autre phrase courte.').longSentences.length, 0);
+});
+
+const sug = (s) => H.suggest(s).map((x) => x.found.toLowerCase());
+test('Suggestions : pléonasmes et anglicismes attestés (Académie, OQLF)', () => {
+  assert.deepEqual(sug("Au jour d'aujourd'hui, on doit monter en haut."), ["au jour d'aujourd'hui", 'monter en haut']);
+  assert.deepEqual(sug('Elles doivent collaborer ensemble, voire même coopérer ensemble, comme par exemple ici.'),
+    ['collaborer ensemble', 'voire même', 'coopérer ensemble', 'comme par exemple']);
+  assert.deepEqual(sug('Il faut initier un nouveau projet.'), ['initier un nouveau projet']);
+  assert.deepEqual(sug("Il met l'emphase sur ce point."), ["met l'emphase"]);
+});
+test('Suggestions : « s’avérer vrai » et « collaborer ensemble » portent la nuance OQLF', () => {
+  const [a] = H.suggest("L'hypothèse s'est avérée vraie.");
+  assert.ok(/pas toujours fautif/.test(a.nuance));
+  const [b] = H.suggest('Ils vont collaborer ensemble.');
+  assert.ok(/clarté/.test(b.nuance));
+});
+test('Suggestions garde-fou : « initier » reste libre en sciences (réaction, transcription)', () => {
+  assert.deepEqual(H.suggest("Le facteur permet d'initier la transcription. L'initiation de la réaction est lente. Il faut initier une réaction chimique."), []);
+  assert.deepEqual(H.suggest("L'étudiant a été initié aux techniques de dosage."), []);
+});
+test('Suggestions : jamais corrigées automatiquement par humanize()', () => {
+  const t = "Au jour d'aujourd'hui, il faut collaborer ensemble.";
+  assert.equal(H.humanize(t).text, t);
+});
+
+/* ---------- 8. v1.5 : suivi d'origine des caractères, dictionnaire Lexique, voix active/passive ---------- */
+const LEXDATA = require('./lexique-data.js');
+const SUITE2 = require('./tests2.js');
+
+test('Suite portable tests2.js (celle de la page tests.html) : tout passe avec le dictionnaire', () => {
+  H.setLexique(LEXDATA);
+  try {
+    const res = SUITE2.runTests(H, LEXDATA);
+    assert.deepEqual(res.filter((r) => !r.pass).map((r) => r.name + ' → ' + r.details), []);
+    assert.ok(res.length >= 29);
+  } finally { H.setLexique(null); }
+});
+test('Relecture : fuzz reproductible (600 textes) : accepter tout = humanize(), refuser tout = original à l’identique', () => {
+  const pool = ['De plus, le coût baisse.', 'Bien sûr ! La réponse est oui.', "L'essentiel est crucial.", 'Un point essentiel et des cas cruciaux.',
+    'Il convient de noter que le taux monte.', 'Le modèle — le plus large du réseau — grandit.', 'Pages 10–20 et A -> B.', 'Le taux baisse, soulignant une tendance.',
+    'J’espère que cela vous aide !', 'Voici un aperçu : le plan est simple.', 'Par ailleurs, c’est fondamental.', 'Une phrase neutre sans rien.',
+    'Les ventes montent, contribuant à 40 % de la hausse.', 'Dans l’ensemble, tout va bien.', 'Ce n’est absolument pas le cas.', 'Il fait figure de pionnier.',
+    "Conclusion : dans l'ensemble, c'est clair.", 'Un texte — avec deux incises — dans la phrase — ici.'];
+  let seed = 12345;
+  const rnd = () => { seed = (seed * 1664525 + 1013904223) % 4294967296; return seed / 4294967296; };
+  let mods = 0;
+  for (let n = 0; n < 600; n++) {
+    const k = 1 + Math.floor(rnd() * 7);
+    let txt = pool[Math.floor(rnd() * pool.length)];
+    for (let i = 1; i < k; i++) txt += (rnd() < 0.2 ? '\n\n' : rnd() < 0.1 ? '\n' : ' ') + pool[Math.floor(rnd() * pool.length)];
+    const r = H.review(txt);
+    assert.ok(r.segments, 'segments manquants : ' + JSON.stringify(txt));
+    mods += r.modifications;
+    assert.equal(H.assemble(r.segments), r.text, 'accepter tout : ' + JSON.stringify(txt));
+    assert.equal(H.assemble(r.segments, r.segments.map(() => false)), txt.trim(), 'refuser tout : ' + JSON.stringify(txt));
+  }
+  assert.ok(mods > 2000);
+});
+test('Relecture : refuser la suppression « Bien sûr ! » rend aussi son espace (texte d’origine exact)', () => {
+  const t = 'Bien sûr ! La réponse est oui. J’espère que cela vous aide !';
+  const r = H.review(t);
+  assert.equal(r.modifications, 2);
+  assert.equal(H.assemble(r.segments, r.segments.map(() => false)), t);
+  const acc = r.segments.map(() => true);
+  acc[r.segments.findIndex((s) => !s.same && /Bien sûr/.test(s.orig))] = false;
+  assert.equal(H.assemble(r.segments, acc), 'Bien sûr ! La réponse est oui.');
+});
+test('Relecture : 1 000 modifications relues en moins de 1,5 s ; au-delà de 3 000, repli propre avec texte corrigé fourni', () => {
+  const base = 'Le modèle est testé sur des données réelles. De plus, le point est crucial et les résultats restent partiels. ';
+  let t0 = process.hrtime.bigint();
+  const r = H.review(base.repeat(500));
+  assert.ok(Number(process.hrtime.bigint() - t0) / 1e6 < 1500);
+  assert.ok(r.segments && r.modifications === 1000);
+  const big = H.review(base.repeat(2500));
+  assert.equal(big.segments, null);
+  assert.ok(big.modifications > 3000 && big.text.length > 1000);
+});
+test('Dictionnaire : intégrité du fichier de données et mention de licence', () => {
+  assert.ok(LEXDATA.verbs.reg.split(' ').length > 3000);
+  assert.ok(Object.keys(LEXDATA.verbs.irr).length > 500);
+  assert.ok(LEXDATA.genre.m.split(' ').length > 10000 && LEXDATA.genre.f.split(' ').length > 8000);
+  const src = fs.readFileSync(path.join(__dirname, 'lexique-data.js'), 'utf8');
+  assert.ok(/CC BY-SA 4\.0/.test(src) && /lexique\.org/.test(src), 'mention de licence / source manquante');
+  H.setLexique(LEXDATA);
+  try {
+    // chaque exception stockée est bien restituée par syllables()
+    for (const k of Object.keys(LEXDATA.syl)) for (const w of LEXDATA.syl[k].split(' ').slice(0, 40)) assert.equal(H.syllables(w), +k, w);
+    assert.equal(H.syllables('chromatographie'), 5);   // absent du dictionnaire : règles de repli
+  } finally { H.setLexique(null); }
+});
+test('Dictionnaire : verbes en -er reconstitués par les règles = formes de Lexique (échantillon irrégulier inclus)', () => {
+  H.setLexique(LEXDATA);
+  try {
+    const voix = (s) => H.reformuler(s, '', '').items[0].variants.filter((v) => /^Voix/.test(v.type)).map((v) => v.text);
+    assert.deepEqual(voix("L'équipe appelle les patients."), ["Les patients sont appelés par l'équipe."]);                   // appeler : doublement du « l » (exception stockée)
+    assert.deepEqual(voix('Les chercheurs ont lu les articles.'), ['Les articles ont été lus par les chercheurs.']);        // lire, participe en -u
+    assert.deepEqual(voix('Les médecins prennent la mesure.'), ['La mesure est prise par les médecins.']);                  // prendre, participe féminin en -ise
+  } finally { H.setLexique(null); }
+});
+test('Voix : sans dictionnaire (état par défaut du moteur), aucune conversion active → passive', () => {
+  assert.equal(H.lexiqueChargee(), false);
+  assert.deepEqual(H.reformuler('Les chercheurs mesurent la concentration.', '', '').items[0].variants.filter((v) => /^Voix/.test(v.type)), []);
+});

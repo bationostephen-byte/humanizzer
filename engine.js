@@ -13,7 +13,7 @@
 })(typeof self !== 'undefined' ? self : globalThis, function () {
   'use strict';
 
-  const VERSION = '1.3.0';
+  const VERSION = '1.5.0';
 
   /* Entrée commune : chaîne NFC (accents décomposés des copier-coller PDF/macOS) et bornée */
   const MAX_CHARS = 300000;
@@ -59,6 +59,120 @@
     return s.length > n ? s.slice(0, n - 1) + '…' : s;
   }
 
+  /* ---------------- suivi d'origine des caractères ----------------
+     Chaque caractère garde sa trace : « né » de quelle modification (born), « supprimé » par laquelle (dead).
+     born/dead = 0 : texte d'origine intact ; -1 : nettoyage d'espaces (toujours appliqué, jamais proposé).
+     Une modification (id > 0) = une correspondance d'une règle : elle est donc indépendante des autres. */
+  const expandRepl = (rep, a) => String(rep).replace(/\$(\$|&|\d)/g, (x, k) => (k === '$' ? '$' : k === '&' ? a[0] : (typeof a[+k] === 'string' ? a[+k] : '')));
+
+  class Doc {
+    constructor(text) {
+      this.ch = String(text).split('');
+      this.born = new Int32Array(this.ch.length);
+      this.dead = new Int32Array(this.ch.length);
+      this.edits = [null];
+      this._refresh();
+    }
+    _refresh() {
+      const idx = [];
+      const out = [];
+      for (let i = 0; i < this.ch.length; i++) if (this.dead[i] === 0) { idx.push(i); out.push(this.ch[i]); }
+      this.idx = idx;
+      this.s = out.join('');
+    }
+    toString() { return this.s; }
+    // Même contrat que String.prototype.replace (callback ou chaîne) ; meta = règle (label…) | null (nettoyage) | 'inherit'
+    replace(re, rep, meta) {
+      const fn = typeof rep === 'function' ? rep : (...a) => expandRepl(rep, a);
+      const found = [];
+      this.s.replace(re, function () {
+        const a = Array.prototype.slice.call(arguments);
+        const out = fn.apply(null, a);
+        if (out !== a[0]) found.push([a[a.length - 2], a[0].length, out]);
+        return a[0];
+      });
+      if (!found.length) return this;
+      const ins = new Map();
+      for (const [off, len, out] of found) {
+        let id;
+        if (meta === null) id = -1;
+        else if (meta === 'inherit') {
+          const b = len ? this.born[this.idx[off]] : 0;
+          id = b > 0 ? b : (this.edits.push({ label: 'Modification de style' }) - 1);
+        } else id = this.edits.push(meta || { label: 'Modification de style' }) - 1;
+        let at;
+        if (len) {
+          for (let j = 0; j < len; j++) this.dead[this.idx[off + j]] = id;
+          at = this.idx[off + len - 1] + 1;
+        } else at = off < this.idx.length ? this.idx[off] : this.ch.length;
+        if (out) { const l = ins.get(at) || []; l.push([id, out]); ins.set(at, l); }
+      }
+      const n = this.ch.length;
+      let extra = 0;
+      for (const l of ins.values()) for (const [, t] of l) extra += t.length;
+      const ch = new Array(n + extra), born = new Int32Array(n + extra), dead = new Int32Array(n + extra);
+      let k = 0;
+      for (let i = 0; i <= n; i++) {
+        const l = ins.get(i);
+        if (l) for (const [id, t] of l) for (let c = 0; c < t.length; c++) { ch[k] = t[c]; born[k] = id; dead[k] = 0; k++; }
+        if (i < n) { ch[k] = this.ch[i]; born[k] = this.born[i]; dead[k] = this.dead[i]; k++; }
+      }
+      this.ch = ch; this.born = born; this.dead = dead;
+      this._refresh();
+      return this;
+    }
+    // Modification voisine (texte supprimé juste avant, sinon juste après) à laquelle rattacher la suppression d'un blanc :
+    // refuser cette modification rend alors aussi son espace, et le texte d'origine est restitué à l'identique.
+    _owner(r) {
+      for (let k = r - 1; k >= 0 && this.dead[k] !== 0; k--) if (this.dead[k] > 0) return this.dead[k];
+      for (let k = r + 1; k < this.ch.length && this.dead[k] !== 0; k++) if (this.dead[k] > 0) return this.dead[k];
+      return -1;
+    }
+    // Supprime les caractères en trop de chaque correspondance (keep(m) = nombre conservé au début ; < 0 : cas laissé au remplacement classique)
+    _prune(re, keep) {
+      const found = [];
+      this.s.replace(re, function () { const a = Array.prototype.slice.call(arguments); found.push([a[a.length - 2], a[0]]); return a[0]; });
+      let touched = false;
+      for (const [off, m] of found) {
+        const k = keep(m);
+        if (k < 0) continue;
+        for (let j = k; j < m.length; j++) { const r = this.idx[off + j]; this.dead[r] = this._owner(r); touched = true; }
+      }
+      if (touched) this._refresh();
+      return this;
+    }
+    trim() {
+      let i = 0;
+      while (i < this.idx.length && /\s/.test(this.ch[this.idx[i]])) { const r = this.idx[i++]; this.dead[r] = this._owner(r); }
+      let j = this.idx.length - 1;
+      while (j >= i && /\s/.test(this.ch[this.idx[j]])) { const r = this.idx[j--]; this.dead[r] = this._owner(r); }
+      this._refresh();
+      return this;
+    }
+    // Découpe le document en texte inchangé et en modifications (une puce par modification, dans l'ordre du texte)
+    segments() {
+      const segs = [];
+      let same = '';
+      let last = null;
+      const flush = () => { if (same) { segs.push({ same: true, text: same }); same = ''; } };
+      for (let i = 0; i < this.ch.length; i++) {
+        const b = this.born[i], d = this.dead[i], c = this.ch[i];
+        if (d === -1) continue;
+        if ((b === 0 || b === -1) && d === 0) { same += c; last = null; continue; }
+        if (b > 0 && d > 0) continue;
+        const id = b > 0 ? b : d;
+        if (!last || last.id !== id) {
+          flush();
+          last = { same: false, id, orig: '', repl: '', label: (this.edits[id] && this.edits[id].label) || 'Modification de style' };
+          segs.push(last);
+        }
+        if (b === 0) last.orig += c; else last.repl += c;
+      }
+      flush();
+      return segs;
+    }
+  }
+
   // Remplace toutes les occurrences en journalisant chaque modification
   function repAll(cur, re, fn, entry, log) {
     return cur.replace(re, function () {
@@ -72,7 +186,7 @@
         log.push({ id: entry.id, rule: entry.rule, label: entry.label, before: excerpt(m, 90), after: excerpt(after, 90) });
       }
       return after;
-    });
+    }, entry);
   }
 
   /* ---------------- 1.3 mots interdits ---------------- */
@@ -148,7 +262,7 @@
         after: '(supprimé, la phrase continue : « ' + replacementChar + '… »)',
       });
       return prefix + replacementChar;
-    });
+    }, { id: 'transitions', rule: '1.2', label: 'Formule creuse supprimée (1.2)' });
     return cur;
   }
 
@@ -159,8 +273,8 @@
     cur = cur.replace(CHATBOT_RE, (m) => {
       log.push({ id: entry.id, rule: entry.rule, label: entry.label, before: excerpt(m, 90), after: '(supprimé)' });
       return /:\s*$/.test(m) ? '\uE001' : ''; // marqueur : la phrase continue après les deux-points
-    });
-    return cur.replace(/\uE001(\p{L})/gu, (_, c) => c.toUpperCase()).replace(/\uE001/g, '');
+    }, entry);
+    return cur.replace(/\uE001(\p{L})/gu, (_, c) => c.toUpperCase(), 'inherit').replace(/\uE001/g, '', 'inherit');
   }
 
   /* ---------------- 2.6 tiret cadratin ---------------- */
@@ -173,7 +287,7 @@
   };
   function applyEmDash(cur, log) {
     const entry = { id: 'emdash', rule: '2.6', label: 'Tiret cadratin remplacé (2.6)' };
-    cur = cur.replace(SPACED_EN_RE, (m, a, s1, s2, b) => ((/\d/.test(a) && /\d/.test(b)) ? m : a + s1 + '—' + s2 + b));
+    cur = cur.replace(SPACED_EN_RE, (m, a, s1, s2, b) => ((/\d/.test(a) && /\d/.test(b)) ? m : a + s1 + '—' + s2 + b), 'inherit');
     cur = repAll(cur, /[^\S\n]*—[^\S\n]*([^—\n]{2,}?)[^\S\n]*—[^\S\n]*/g, (m, g) => ' (' + g[0].trim() + ') ', entry, log);
     cur = repAll(cur, /[^\S\n]*—[^\S\n]*/g, () => ', ', entry, log);
     return cur;
@@ -230,10 +344,11 @@
 
   /* ---------------- nettoyage final ---------------- */
   function cleanup(cur) {
-    cur = cur.replace(/[ \t]{2,}/g, ' ');
-    cur = cur.replace(/ +([,.])/g, '$1');
-    cur = cur.replace(/,{2,}/g, ',');
-    cur = cur.replace(/\n{3,}/g, '\n\n');
+    cur._prune(/[ \t]{2,}/g, (m) => (/^ +$/.test(m) ? 1 : -1));   // plusieurs espaces -> un seul
+    cur.replace(/[ \t]{2,}/g, ' ', null);                          // (restes : séquences contenant une tabulation)
+    cur._prune(/ +(?=[,.])/g, () => 0);                           // pas d'espace avant « , » et « . »
+    cur._prune(/,{2,}/g, () => 1);                                // virgules doublées
+    cur._prune(/\n{3,}/g, () => 2);                               // lignes vides multiples
     return cur.trim();
   }
 
@@ -335,14 +450,14 @@
   }
 
   /* ---------------- pipeline principal ---------------- */
-  function humanize(text, cats) {
+  function humanizeCore(text, cats) {
     const active = Object.assign(
       { chatbot: true, emdash: true, arrow: true, participes: true, transitions: true, register: true, periphrases: true, banned: true },
       cats || {}
     );
     const log = [];
     const orig = prep(text);
-    let cur = orig;
+    let cur = new Doc(orig);
     if (active.chatbot) cur = applyChatbot(cur, log);
     if (active.emdash) cur = applyEmDash(cur, log);
     if (active.arrow) cur = applyArrows(cur, log);
@@ -352,8 +467,10 @@
     if (active.periphrases) cur = applyPeriphrases(cur, log);
     if (active.banned) cur = applyBanned(cur, log);
     cur = cleanup(cur);
-    return { text: cur, log, before: analyze(orig), after: analyze(cur) };
+    const out = cur.toString();
+    return { doc: cur, result: { text: out, log, before: analyze(orig), after: analyze(out) } };
   }
+  function humanize(text, cats) { return humanizeCore(text, cats).result; }
 
   /* ---------------- compétence « reformuler » ---------------- */
   const NUM_RE = /\d+(?:[.,]\d+)?\s*(?:%|€|\$|°C|kg|g|t|km|m|cm|mm|kcal|cal|ms|min|h|ha|L|mL|m²|km²)?/g;
@@ -499,6 +616,11 @@
       push(rs.a, 'Tournure « Il ressort de … que »');
       push(rs.b, 'Tournure « D’après … , »');
     }
+    // 7) voix passive -> active (agent humain ou collectif)
+    const pa = passiveToActive(s);
+    if (pa) push(pa, 'Voix passive → voix active');
+    const ap = activeToPassive(s);
+    if (ap) push(ap, 'Voix active → voix passive');
     // 6) « permet de »
     const pm = permetDe(s);
     if (pm) push(pm, 'Sujet remplacé par « Avec … , on peut »');
@@ -594,5 +716,328 @@
     return { distance: r2(dist), similarity: r2(dist), jaccard: r2(jac), containment: r2(containment), ratio, reliable: true, verdict };
   }
 
-  return { VERSION, MAX_CHARS, humanize, analyze, reformuler, compose, patchCheck, countWords, splitSentences, jaccard, bigrams };
+
+  /* =====================================================================
+     v1.4 : relecture modification par modification, qualité du texte,
+     suggestions de style, voix passive -> active (sujet « agent humain »)
+     ===================================================================== */
+
+  /* ---------- relecture modification par modification ---------- */
+  const MAX_CHIPS = 3000;
+
+  // Découpe le résultat de humanize() en texte inchangé et en modifications indépendantes (une par correspondance de règle)
+  function review(text, cats) {
+    const core = humanizeCore(text, cats);
+    const segments = core.doc.segments();
+    const nb = segments.filter((x) => !x.same).length;
+    return Object.assign({}, core.result, { segments: nb > MAX_CHIPS ? null : segments, modifications: nb });
+  }
+
+  // Reconstruit le texte selon les choix (accepted[i] === false : on garde l'original de ce segment)
+  function assemble(segments, accepted) {
+    return segments.map((s, i) => (s.same ? s.text : (accepted && accepted[i] === false ? s.orig : s.repl))).join('').trim();
+  }
+
+  /* ---------- qualité du texte : lisibilité, richesse lexicale, répétitions ---------- */
+  const VOWELS = 'aeiouyàâäéèêëîïôöùûüœæÿ';
+  /* ---------- données Lexique 3.83 (facultatives, chargées à la demande) ----------
+     Fichier lexique-data.js : syllabes, genre des noms, conjugaison. Licence CC BY-SA 4.0 (New, Pallier et al.).
+     Sans ce fichier, tout fonctionne avec des règles de repli (moins précises). */
+  let LEX = null;
+  const VOW_NOY = 'aeiouàâäéèêëîïôöùûüœæ';
+  const RE_Y = new RegExp('([' + VOW_NOY + '])y([' + VOW_NOY + '])', 'g');
+  const RE_MUTE = new RegExp('[^' + VOWELS + ']es?$');
+  const RE_GROUP = new RegExp('[' + VOWELS + ']+', 'g');
+
+  // Règles de repli : groupes vocaliques, « y » entre voyelles = consonne, -que/-gue (u muet), « e » muet final
+  function syllablesRules(word) {
+    let w = String(word).toLowerCase().replace(/['’]/g, '');
+    w = w.replace(RE_Y, '$1j$2').replace(/([qg])ue(s?)$/, '$1$2');
+    const g = w.match(RE_GROUP);
+    if (!g) return 1;
+    let n = g.length;
+    if (n > 1 && RE_MUTE.test(w)) n--;
+    return Math.max(1, n);
+  }
+  // Nombre de syllabes (convention phonétique de Lexique : « table » = 1) : exceptions du dictionnaire, sinon règles
+  function syllables(word) {
+    const w = String(word).toLowerCase().replace(/’/g, "'");
+    if (LEX && LEX.syl.has(w)) return LEX.syl.get(w);
+    return syllablesRules(w);
+  }
+
+  function setLexique(data) {
+    if (!data) { LEX = null; return false; }
+    const syl = new Map();
+    for (const k of Object.keys(data.syl || {})) for (const w of data.syl[k].split(' ')) if (w) syl.set(w, +k);
+    const genre = new Map();
+    for (const g of ['m', 'f']) for (const w of ((data.genre || {})[g] || '').split(' ')) if (w) genre.set(w, g);
+    const lem = new Map(), finite = new Map(), part = new Map();
+    const register = (lemma, f) => {
+      lem.set(lemma, f);
+      for (const [k, tense, plural] of [['p3s', 'pres', false], ['p3p', 'pres', true], ['i3s', 'imp', false], ['i3p', 'imp', true], ['f3s', 'fut', false], ['f3p', 'fut', true]]) {
+        if (!f[k]) continue;
+        const l = finite.get(f[k]) || [];
+        l.push({ lemma, tense, plural });
+        finite.set(f[k], l);
+      }
+      for (const [k, g, n] of [['ms', 'm', 's'], ['fs', 'f', 's'], ['mp', 'm', 'p'], ['fp', 'f', 'p']]) {
+        const form = f.par[k];
+        if (!form) continue;
+        const e = part.get(form);
+        if (e && e.lemma !== lemma) e.amb = true; else if (!e) part.set(form, { lemma, g, n, amb: false });
+      }
+    };
+    const v = data.verbs || {};
+    for (const lemma of (v.reg || '').split(' ')) {
+      if (!lemma) continue;
+      const stem = lemma.slice(0, -2);
+      register(lemma, {
+        p3s: conj1(stem, 'pres', false), p3p: conj1(stem, 'pres', true), i3s: conj1(stem, 'imp', false), i3p: conj1(stem, 'imp', true),
+        f3s: conj1(stem, 'fut', false), f3p: conj1(stem, 'fut', true), par: { ms: stem + 'é', fs: stem + 'ée', mp: stem + 'és', fp: stem + 'ées' },
+      });
+    }
+    for (const lemma of Object.keys(v.irr || {})) {
+      const [fin, pa] = v.irr[lemma].split(';');
+      const a = fin.split(','), b = pa.split(',');
+      register(lemma, { p3s: a[0], p3p: a[1], i3s: a[2], i3p: a[3], f3s: a[4], f3p: a[5], par: { ms: b[0], fs: b[1], mp: b[2], fp: b[3] } });
+    }
+    LEX = { syl, genre, lem, finite, part, version: data.version || '' };
+    return true;
+  }
+  const lexiqueChargee = () => LEX !== null;
+
+  const STOP = new Set(('le la les l un une des du de d et ou mais donc or ni car que qui quoi dont où ce cet cette ces ça cela ceci celui celle ceux celles ' +
+    'il elle on ils elles nous vous je tu me te se lui leur leurs eux en y à au aux par pour sur sous dans avec sans entre vers chez comme si ne pas plus moins ' +
+    'très aussi alors ainsi puis cependant toutefois pourtant lors ensuite est sont était étaient être été sera seront a ont avait avaient avoir aura auront ' +
+    'fait faire peut peuvent pouvoir doit doivent devoir son sa ses mon ma mes ton ta tes notre nos votre vos tout tous toute toutes autre autres même mêmes ' +
+    'chaque plusieurs certains certaines quelques déjà encore ici là quand lorsque puisque parce afin selon après avant pendant depuis jusqu qu n s t m c j ' +
+    'sont fut furent soit sera étant ayant donné nombre cas part type').split(' '));
+
+  // Pistes de synonymes : SUGGESTIONS À VALIDER selon le contexte (jamais appliquées automatiquement)
+  const SYN = [
+    [/^études?$/, 'étude', 'recherche, travail, enquête'],
+    [/^résultats?$/, 'résultat', 'observation, donnée, constat'],
+    [/^montr/, 'montrer', 'révéler, indiquer, mettre en évidence, établir'],
+    [/^utilis/, 'utiliser', 'employer, recourir à, mobiliser'],
+    [/^méthodes?$/, 'méthode', 'procédé, technique, protocole, approche'],
+    [/^augment/, 'augmenter', 's’accroître, croître, progresser'],
+    [/^important/, 'important', 'notable, majeur, déterminant'],
+    [/^différent/, 'différent', 'distinct, divers'],
+    [/^permet/, 'permettre', 'rendre possible, autoriser, donner accès à'],
+  ];
+
+  // MATTR (Covington & McFall, 2010) : moyenne du TTR sur une fenêtre glissante, insensible à la longueur du texte
+  function mattr(toks, w) {
+    const n = toks.length;
+    if (n < w) return null;
+    const counts = new Map();
+    let distinct = 0, sum = 0;
+    for (let i = 0; i < n; i++) {
+      const a = toks[i];
+      const ca = counts.get(a) || 0;
+      if (ca === 0) distinct++;
+      counts.set(a, ca + 1);
+      if (i >= w) {
+        const b = toks[i - w];
+        const cb = counts.get(b) - 1;
+        counts.set(b, cb);
+        if (cb === 0) distinct--;
+      }
+      if (i >= w - 1) sum += distinct / w;
+    }
+    return sum / (n - w + 1);
+  }
+
+  function quality(text) {
+    const t = prep(text);
+    const sents = splitSentences(t);
+    const toks = t.toLowerCase().match(/\p{L}+(?:-\p{L}+)*|\p{N}+/gu) || [];
+    const words = toks.filter((w) => /\p{L}/u.test(w));
+    const nW = words.length, nS = sents.length;
+    // Mots tels qu'on les compte à l'écrit (« l'étude » = 1 mot) pour la lisibilité
+    const readW = t.toLowerCase().match(/\p{L}+(?:['’-]\p{L}+)*/gu) || [];
+    const nR = readW.length;
+    const syl = readW.reduce((a, w) => a + syllables(w), 0);
+
+    // Flesch adapté au français (Kandel & Moles, 1958)
+    const asl = nS ? nR / nS : 0, asw = nR ? syl / nR : 0;
+    const fre = 207 - 1.015 * asl - 73.6 * asw;
+    const rLabel = fre >= 60 ? 'plutôt facile' : fre >= 40 ? 'intermédiaire' : fre >= 20 ? 'difficile' : 'très difficile';
+
+    // richesse lexicale
+    const win = 50;
+    const m = mattr(words, win);
+    const ttr = nW ? new Set(words).size / nW : 0;
+
+    // mots lexicaux les plus répétés
+    const freq = new Map();
+    for (const w of words) {
+      if (w.length < 4 || STOP.has(w) || /^\p{N}+$/u.test(w)) continue;
+      const k = w.length > 4 ? w.replace(/[sx]$/, '') : w;
+      const e = freq.get(k) || { count: 0, forms: new Map() };
+      e.count++;
+      e.forms.set(w, (e.forms.get(w) || 0) + 1);
+      freq.set(k, e);
+    }
+    const repeated = [...freq.values()].filter((e) => e.count >= 3)
+      .sort((a, b) => b.count - a.count).slice(0, 5)
+      .map((e) => {
+        const word = [...e.forms.entries()].sort((a, b) => b[1] - a[1])[0][0];
+        const syn = SYN.find(([re]) => re.test(word));
+        return { word, count: e.count, hint: syn ? { lemma: syn[1], alternatives: syn[2] } : null };
+      });
+
+    // phrases très longues
+    const longSentences = sents.map((s) => ({ words: countWords(s), excerpt: excerpt(s, 110) })).filter((x) => x.words >= 40);
+
+    return {
+      words: nR, sentences: nS,
+      readability: {
+        score: Math.round(fre * 10) / 10, label: rLabel, asl: Math.round(asl * 10) / 10, asw: Math.round(asw * 100) / 100, reliable: nR >= 100 && nS >= 3,
+        method: LEX ? 'dictionnaire Lexique 3.83 (mots courants exacts) + règles pour les autres mots'
+          : 'règles seules (exactes pour environ 99 % des occurrences du français courant et 91 % des mots rares, mesuré sur Lexique 3.83)',
+        dictionary: LEX !== null,
+      },
+      lexical: { mattr: m === null ? null : Math.round(m * 1000) / 1000, window: win, ttr: Math.round(ttr * 1000) / 1000, reliable: m !== null && nW >= 2 * win },
+      repeated, longSentences,
+    };
+  }
+
+  /* ---------- suggestions de style : JAMAIS corrigées automatiquement ---------- */
+  const INITIER_OBJ = '(?:projets?|programmes?|politiques?|démarches?|débats?|discussions?|réflexions?|partenariats?|collaborations?|stratégies?|réformes?|plans?|actions?|initiatives?|dialogues?|études?|recherches?|enquêtes?)';
+  const STYLE_HINTS = [
+    { kind: 'Pléonasme', re: /\bau jour d['’]aujourd['’]hui\b/gi, advice: '« aujourd’hui », « à ce jour » ou « actuellement »' },
+    { kind: 'Pléonasme', re: /\bmont(?:er|e|ent|ons|ez|é|ée|és|ées|ait|aient)\s+en haut\b/gi, advice: 'le verbe seul : « monter »' },
+    { kind: 'Pléonasme', re: /\bdescend(?:re|s|ent|ons|ez|u|ue|us|ues|ait|aient)\s+en bas\b/gi, advice: 'le verbe seul : « descendre »' },
+    { kind: 'Pléonasme', re: /\bsort(?:ir|ent|s|t|ons|ez|i|ie|is|ies|ait|aient)\s+dehors\b/gi, advice: 'le verbe seul : « sortir »' },
+    { kind: 'Pléonasme', re: /\bentr(?:er|e|ent|ons|ez|é|ée|és|ées|ait|aient)\s+dedans\b/gi, advice: 'le verbe seul : « entrer »' },
+    { kind: 'Pléonasme', re: /\b(?:collabor|coop[ée]r|cohabit|r[ée]uni|concert)\p{L}*\s+ensemble\b/giu, advice: '« travailler ensemble » ou le verbe seul (« collaborer »)',
+      nuance: 'Parfois justifié par un souci de clarté (OQLF) : à vous de juger selon le contexte.' },
+    { kind: 'Pléonasme', re: /\bavér\p{L}*\s+(?:vrai|exact)\p{L}*/giu, advice: '« se révéler exact », « être confirmé », ou « s’avérer » suivi d’un autre adjectif',
+      nuance: 'Traditionnellement jugé pléonastique, mais pas toujours fautif (OQLF) ; dans la langue soignée, mieux vaut l’éviter.' },
+    { kind: 'Pléonasme', re: /\bcomme par exemple\b/gi, advice: '« par exemple » ou « comme »' },
+    { kind: 'Pléonasme', re: /\bvoire même\b/gi, advice: '« voire » ou « même » seul' },
+    { kind: 'Pléonasme', re: /\bs['’]entraid\p{L}*\s+mutuellement\b/giu, advice: '« s’entraider » seul' },
+    { kind: 'Pléonasme', re: /\b(?:prévo|prévoi|prédi)\p{L}*\s+(?:à l['’]avance|d['’]avance)\b/giu, advice: 'le verbe seul (« prévoir », « prédire »)' },
+    { kind: 'Pléonasme', re: /\bunanimité totale\b/gi, advice: '« unanimité »' },
+    { kind: 'Anglicisme', re: new RegExp("\\binitie\\p{L}*\\s+(?:un|une|le|la|les|des|ce|cette|ces|son|sa|ses|notre|nos)\\s+(?:nouveau\\s+|nouvelle\\s+|nouveaux\\s+)?" + INITIER_OBJ + "\\b", 'giu'),
+      advice: '« lancer », « engager », « amorcer », « entreprendre » ou « être à l’origine de »',
+      nuance: 'Au sens de « commencer ». En sciences, « initier une réaction / la transcription » reste correct (Académie française, 9e éd.).' },
+    { kind: 'Anglicisme', re: /\bmet(?:tre|s|tent|tons|tez)?\s+l['’]emphase\b/gi, advice: '« mettre l’accent sur »' },
+  ];
+
+  function suggest(text) {
+    const t = prep(text);
+    const out = [];
+    for (const h of STYLE_HINTS) {
+      for (const m of t.matchAll(h.re)) {
+        out.push({ kind: h.kind, found: m[0], advice: h.advice, nuance: h.nuance || '', index: m.index });
+      }
+    }
+    return out.sort((a, b) => a.index - b.index);
+  }
+
+  /* ---------- voix passive <-> active (agent humain ou collectif uniquement) ---------- */
+  // « par » introduit aussi un MOYEN (« obtenu par filtration ») : on ne convertit que si l'agent est une personne ou une équipe.
+  const AGENT_HEADS = "(?:chercheurs?|chercheuses?|auteurs?|équipes?|scientifiques?|laboratoires?|participants?|patients?|médecins?|cliniciens?|experts?|techniciens?|étudiants?|enseignants?|enquêteurs?|expérimentateurs?|investigateurs?|biologistes?|chimistes?|analystes?|opérateurs?|infirmiers?)";
+  const AGENT_DET = "(l['’]|(?:le|la|les|un|une|des|ces|cette|notre|nos|ses|leurs?)\\s+)";
+  const TAIL_PP = "(?:(?:[^\\s,;:()]+\\s+){0,5}[^\\s,;:()]+)";
+  const WORD = "[a-zàâäçéèêëîïôöùûüœ]+";
+  const PASSIVE_RE = new RegExp(
+    "^((?:Le|La|L['’]|Les|Cette|Ces|Un|Une|Des|Notre|Nos|Son|Sa|Ses)(?:\\s?[^\\s,;:()]+){0,8}?)\\s+(est|sont|était|étaient|sera|seront|a été|ont été)\\s+" +
+    "(" + WORD + ")\\s+par\\s+" + AGENT_DET + "(" + AGENT_HEADS + ")((?:\\s+" + PP_PREP + "\\s+" + TAIL_PP + ")?)\\.$");
+  const ACTIVE_RE = new RegExp(
+    "^(L['’]|(?:Le|La|Les|Un|Une|Des|Ces|Cette|Notre|Nos)\\s+)(" + AGENT_HEADS + ")\\s+((?:a|ont)\\s+" + WORD + "|" + WORD + ")\\s+" +
+    "(l['’]|(?:le|la|les|un|une|des|ce|cet|cette|ces|son|sa|ses|notre|nos)\\s+)(" + WORD + ")((?:\\s+" + PP_PREP + "\\s+" + TAIL_PP + ")?)\\.$");
+  const NOCONS = '[^' + VOWELS + ']';
+  // verbes qui n'ont pas de passif avec un complément d'objet direct (copules, auxiliaires, modaux)
+  const NO_PASSIVE = new Set(['être', 'avoir', 'devoir', 'pouvoir', 'savoir', 'vouloir', 'falloir', 'sembler', 'paraître', 'rester', 'demeurer', 'devenir', 'aller', 'venir']);
+
+  function conj1(stem, tense, plural) {
+    let st = stem;
+    if (tense === 'pres') {
+      if (/y$/.test(st)) st = st.slice(0, -1) + 'i';
+      st = st.replace(new RegExp('é(' + NOCONS + '+)$'), 'è$1').replace(new RegExp('e(' + NOCONS + ')$'), 'è$1');
+      return st + (plural ? 'ent' : 'e');
+    }
+    if (tense === 'imp') {
+      if (/g$/.test(st)) st += 'e';
+      else if (/c$/.test(st)) st = st.slice(0, -1) + 'ç';
+      return st + (plural ? 'aient' : 'ait');
+    }
+    if (/y$/.test(st)) st = st.slice(0, -1) + 'i';
+    st = st.replace(new RegExp('e(' + NOCONS + ')$'), 'è$1');
+    return st + (plural ? 'eront' : 'era');
+  }
+
+  // Forme active conjuguée pour un participe : dictionnaire (irréguliers compris) ou règle des verbes en -er
+  function activeForm(word, tense, plural) {
+    const info = LEX && LEX.part.get(word);
+    if (info) {
+      if (info.amb || NO_PASSIVE.has(info.lemma)) return null;
+      const f = LEX.lem.get(info.lemma);
+      if (!f) return null;
+      const out = tense === 'pc' ? (f.par.ms ? (plural ? 'ont ' : 'a ') + f.par.ms : '')
+        : f[({ pres: 'p3', imp: 'i3', fut: 'f3' })[tense] + (plural ? 'p' : 's')];
+      return out || null;
+    }
+    // verbe inconnu du dictionnaire : seulement les participes réguliers en -é, et on s'abstient pour les cas à doublement
+    if (!/(?:é|ée|és|ées)$/.test(word)) return null;
+    const stem = word.replace(/(?:é|ée|és|ées)$/, '');
+    if (stem.length < 3 || /(?:el|et)$/.test(stem) || /^(?:envoy|all|ét)/.test(stem)) return null;
+    return tense === 'pc' ? (plural ? 'ont ' : 'a ') + stem + 'é' : conj1(stem, tense, plural);
+  }
+
+  function passiveToActive(s) {
+    const m = PASSIVE_RE.exec(s);
+    if (!m) return null;
+    const subj = m[1], aux = m[2], word = m[3], det = m[4], head = m[5], tail = m[6] || '';
+    if (hasNegation(subj) || hasComplexClause(subj) || countWords(subj) > 9) return null;
+    const plural = /^(?:les|des|ces|nos|ses|leurs)$/.test(det.trim().toLowerCase());
+    const tense = /^(?:est|sont)$/.test(aux) ? 'pres' : /^(?:était|étaient)$/.test(aux) ? 'imp' : /^(?:sera|seront)$/.test(aux) ? 'fut' : 'pc';
+    const verb = activeForm(word, tense, plural);
+    if (!verb) return null;
+    const obj = subj.charAt(0).toLowerCase() + subj.slice(1);
+    return cap1(det + head) + ' ' + verb + ' ' + obj + tail + '.';
+  }
+
+  // « Les chercheurs mesurent la concentration. » -> « La concentration est mesurée par les chercheurs. »
+  // Exige le dictionnaire : le participe s'accorde avec le GENRE du complément d'objet, que seule la base connaît.
+  function activeToPassive(s) {
+    if (!LEX) return null;
+    const m = ACTIVE_RE.exec(s);
+    if (!m) return null;
+    const agDet = m[1], agHead = m[2], vb = m[3], obDet = m[4], noun = m[5], tail = m[6] || '';
+    const agPlural = /^(?:Les|Des|Ces)\s/.test(agDet);
+    // verbe : « a/ont + participe » ou forme simple (présent, imparfait, futur)
+    let lemma, tense;
+    const pc = /^(a|ont)\s+(\S+)$/.exec(vb);
+    if (pc) {
+      if ((pc[1] === 'ont') !== agPlural) return null;
+      const info = LEX.part.get(pc[2]);
+      if (!info || info.amb || info.g !== 'm' || info.n !== 's') return null;   // forme « masculin singulier » exigée après « avoir »
+      lemma = info.lemma; tense = 'pc';
+    } else {
+      const cands = (LEX.finite.get(vb) || []).filter((c) => c.plural === agPlural);
+      if (cands.length !== 1) return null;                                          // forme absente ou ambiguë : on s'abstient
+      lemma = cands[0].lemma; tense = cands[0].tense;
+    }
+    if (NO_PASSIVE.has(lemma)) return null;
+    const f = LEX.lem.get(lemma);
+    // complément d'objet : genre connu (dictionnaire) et nombre donné par le déterminant
+    const g = LEX.genre.get(noun.toLowerCase());
+    if (!f || !g) return null;
+    const obPlural = /^(?:les|des|ces|ses|nos)\s/.test(obDet);
+    const pa = f.par[g + (obPlural ? 'p' : 's')];
+    if (!pa) return null;
+    const aux = tense === 'pres' ? (obPlural ? 'sont' : 'est')
+      : tense === 'imp' ? (obPlural ? 'étaient' : 'était')
+        : tense === 'fut' ? (obPlural ? 'seront' : 'sera')
+          : (obPlural ? 'ont été' : 'a été');
+    const by = agDet.charAt(0).toLowerCase() + agDet.slice(1);
+    return cap1(obDet + noun) + ' ' + aux + ' ' + pa + ' par ' + by + agHead + tail + '.';
+  }
+
+  return { VERSION, MAX_CHARS, syllables, syllablesRules, setLexique, lexiqueChargee, humanize, review, assemble, analyze, quality, suggest, reformuler, compose, patchCheck, countWords, splitSentences, jaccard, bigrams };
 });

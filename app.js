@@ -10,12 +10,36 @@
   }
   // Toute erreur levée par le moteur (texte trop long, bug) s'affiche au lieu de rester silencieuse dans la console
   const safe = (fn) => function () {
-    try { return fn.apply(this, arguments); } catch (e) {
+    const echec = (e) => {
       console.error(e);
       alert(e instanceof RangeError ? e.message : 'Erreur inattendue : ' + e.message);
-    }
+    };
+    try {
+      const r = fn.apply(this, arguments);
+      if (r && typeof r.then === 'function') r.catch(echec);
+      return r;
+    } catch (e) { echec(e); }
   };
   const on = (id, fn) => $(id).addEventListener('click', safe(fn));
+
+  // Dictionnaire Lexique (syllabes, genre, verbes) : chargé UNE fois, seulement quand on analyse ou reformule.
+  // S'il est indisponible (hors ligne, fichier absent), l'outil fonctionne avec ses règles de repli.
+  let lexiquePromesse = null;
+  function chargerLexique() {
+    if (H.lexiqueChargee()) return Promise.resolve(true);
+    if (lexiquePromesse) return lexiquePromesse;
+    lexiquePromesse = new Promise((resolve) => {
+      if (window.HumanizzerLexique) { resolve(H.setLexique(window.HumanizzerLexique)); return; }
+      const sc = document.createElement('script');
+      sc.src = 'lexique-data.js?v=' + H.VERSION;
+      sc.onload = () => resolve(Boolean(window.HumanizzerLexique) && H.setLexique(window.HumanizzerLexique));
+      sc.onerror = () => resolve(false);
+      document.head.appendChild(sc);
+      setTimeout(() => resolve(false), 15000);
+    });
+    return lexiquePromesse;
+  }
+  const AVIS_DICO = '<div class="avert">Dictionnaire indisponible (hors ligne ou fichier absent) : l’outil utilise ses règles de repli. Les voix active et passive irrégulières et la syllabation des mots courants sont alors moins précises.</div>';
 
   /* ---------- navigation ---------- */
   const navTests = $('nav-tests');
@@ -46,7 +70,7 @@
     historique.push(txt);
     $('hz-annuler').disabled = false;
     const cats = lireCategories();
-    const r = H.humanize(txt, cats);
+    const r = H.review(txt, cats);
     $('hz-resultats').style.display = 'block';
     $('hz-sortie').value = r.text;
     $('hz-score').textContent = 'Conformité : ' + r.before.score + ' → ' + r.after.score + ' / 100';
@@ -73,6 +97,8 @@
           ? (cats[v.id] === false ? 'Catégorie désactivée : non corrigée.' : 'Non corrigé automatiquement (chiffre, élision ou contexte ambigu) : relisez et corrigez à la main.')
           : conseil(v.id)) + '</div>').join('');
     }
+    afficherRevue(r);
+    afficherSuggestions($('hz-suggestions'), H.suggest(r.text));
   });
 
   function conseil(id) {
@@ -96,6 +122,105 @@
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#39;');
+  }
+
+  /* ---------- relecture modification par modification ---------- */
+  let revue = null; // { segments, accepted, chips, avant }
+  function majSortieRevue() {
+    const texte = H.assemble(revue.segments, revue.accepted);
+    $('hz-sortie').value = texte;
+    $('hz-score').textContent = 'Conformité : ' + revue.avant + ' → ' + H.analyze(texte).score + ' / 100';
+  }
+  function afficherRevue(r) {
+    const carte = $('hz-revue-carte');
+    if (!r.segments) {
+      // trop de modifications pour la relecture une à une : on le dit, le texte corrigé reste disponible
+      carte.style.display = 'block';
+      revue = null;
+      $('hz-revue').textContent = 'Plus de 3 000 modifications : la relecture une à une est désactivée pour garder la page fluide. Le texte corrigé complet est fourni ci-dessous ; pour décider modification par modification, traitez votre texte par parties (par chapitre ou par section).';
+      return;
+    }
+    if (r.segments.every((s) => s.same)) {
+      carte.style.display = 'none';
+      revue = null;
+      return;
+    }
+    carte.style.display = 'block';
+    revue = { segments: r.segments, accepted: r.segments.map(() => true), chips: [], avant: r.before.score };
+    const zone = $('hz-revue');
+    zone.innerHTML = '';
+    r.segments.forEach((s, i) => {
+      if (s.same) { zone.appendChild(document.createTextNode(s.text)); return; }
+      const chip = document.createElement('span');
+      chip.className = 'chg on';
+      chip.tabIndex = 0;
+      chip.setAttribute('role', 'button');
+      chip.title = s.label;
+      const del = document.createElement('del');
+      del.textContent = s.orig.trim() || '∅';
+      const ins = document.createElement('ins');
+      ins.textContent = s.repl.trim() || '(supprimé)';
+      chip.appendChild(del);
+      chip.appendChild(document.createTextNode(' → '));
+      chip.appendChild(ins);
+      const basculer = safe(() => {
+        const nouveau = !revue.accepted[i];
+        // une modification peut s'étendre sur plusieurs morceaux du texte : ils basculent ensemble
+        revue.segments.forEach((x, j) => {
+          if (!x.same && x.id === s.id) { revue.accepted[j] = nouveau; revue.chips[j].className = 'chg ' + (nouveau ? 'on' : 'off'); }
+        });
+        majSortieRevue();
+      });
+      chip.addEventListener('click', basculer);
+      chip.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); basculer(); } });
+      revue.chips[i] = chip;
+      zone.appendChild(chip);
+      zone.appendChild(document.createTextNode(' '));
+    });
+  }
+  function toutRevue(valeur) {
+    if (!revue) return;
+    revue.segments.forEach((s, i) => {
+      if (s.same) return;
+      revue.accepted[i] = valeur;
+      revue.chips[i].className = 'chg ' + (valeur ? 'on' : 'off');
+    });
+    majSortieRevue();
+  }
+  on('hz-tout-accepter', () => toutRevue(true));
+  on('hz-tout-refuser', () => toutRevue(false));
+
+  function afficherSuggestions(zone, items, vide) {
+    if (!zone) return;
+    if (!items.length) { zone.innerHTML = vide ? '<div class="note">' + echap(vide) + '</div>' : ''; return; }
+    zone.innerHTML = '<b style="font-size:.9rem">Suggestions de style (à votre appréciation) :</b>' + items.map((x) =>
+      '<div class="avert"><b>' + echap(x.kind) + '</b> : « ' + echap(x.found) + ' » → ' + echap(x.advice) +
+      (x.nuance ? '<br><span class="note">' + echap(x.nuance) + '</span>' : '') + '</div>').join('');
+  }
+
+  function afficherQualite(zone, q) {
+    const rd = q.readability, lx = q.lexical;
+    let h = '<h2>Qualité du texte <span class="note">(indicateurs, sans note globale)</span></h2>';
+    h += '<p><b>Lisibilité</b> (Flesch adapté au français, Kandel et Moles, 1958) : <b>' + rd.score + '</b> (' + echap(rd.label) + ') · ' +
+      rd.asl + ' mots par phrase · ' + rd.asw + ' syllabes par mot (estimation)' +
+      (rd.reliable ? '' : ' · <span class="badge atten">texte trop court pour être fiable (moins de 100 mots ou 3 phrases)</span>') + '</p>';
+    h += '<p class="note">Comptage des syllabes : ' + echap(rd.method) + '.</p>';
+    h += '<p class="note">Plus le score est bas, plus le texte est difficile à lire. Un texte scientifique obtient souvent un score bas à cause de son vocabulaire technique : comparez vos textes entre eux plutôt qu’à une cible absolue. Aucune correspondance fiable avec un niveau d’études n’est établie ici.</p>';
+    h += '<p><b>Richesse lexicale</b> (MATTR, fenêtre de ' + lx.window + ' mots) : ' +
+      (lx.mattr === null ? 'non calculable (moins de ' + lx.window + ' mots)' : '<b>' + lx.mattr + '</b>' + (lx.reliable ? '' : ' <span class="badge atten">texte court : indicatif</span>')) +
+      ' · TTR brut : ' + lx.ttr + ' <span class="note">(le TTR baisse mécaniquement quand le texte s’allonge ; fiez-vous au MATTR)</span></p>';
+    h += '<p><b>Mots lexicaux les plus répétés</b> (3 fois ou plus) :</p>';
+    if (q.repeated.length === 0) h += '<p class="note">Aucun.</p>';
+    else {
+      h += '<ul>' + q.repeated.map((x) => '<li>« ' + echap(x.word) + ' » : ' + x.count + ' fois' +
+        (x.hint ? ' <span class="note">· pistes pour « ' + echap(x.hint.lemma) + ' » : ' + echap(x.hint.alternatives) + ' (à valider selon le contexte)</span>' : '') + '</li>').join('') + '</ul>';
+      h += '<p class="note">Ne remplacez jamais un terme technique (nom d’espèce, de molécule, de méthode) par un synonyme : la répétition y est normale.</p>';
+    }
+    h += '<p><b>Phrases très longues</b> (40 mots ou plus) : ' + q.longSentences.length + '</p>';
+    if (q.longSentences.length) {
+      h += '<ul>' + q.longSentences.slice(0, 3).map((x) => '<li>' + x.words + ' mots : ' + echap(x.excerpt) + '</li>').join('') + '</ul>';
+    }
+    zone.innerHTML = h;
   }
 
   $('hz-annuler').addEventListener('click', () => {
@@ -132,13 +257,14 @@
 
   /* ---------- mode 2 : reformuler ---------- */
   let dernierResultat = null;
-  on('rf-lancer', () => {
+  on('rf-lancer', async () => {
     const txt = $('rf-entree').value;
     if (!txt.trim()) { alert('Collez d\'abord l\'extrait de la source.'); return; }
+    const dico = await chargerLexique();
     dernierResultat = H.reformuler(txt, $('rf-source').value, $('rf-termes').value);
     $('rf-resultats').style.display = 'block';
     const alertes = $('rf-alertes');
-    alertes.innerHTML = dernierResultat.warns.map((w) => '<div class="avert">' + echap(w) + '</div>').join('');
+    alertes.innerHTML = dernierResultat.warns.map((w) => '<div class="avert">' + echap(w) + '</div>').join('') + (dico ? '' : AVIS_DICO);
     const zone = $('rf-phrases');
     zone.innerHTML = '';
     dernierResultat.items.forEach((item) => {
@@ -229,9 +355,10 @@
   });
 
   /* ---------- mode 3 : analyser ---------- */
-  on('an-lancer', () => {
+  on('an-lancer', async () => {
     const txt = $('an-entree').value;
     if (!txt.trim()) { alert('Collez d\'abord un texte à auditer.'); return; }
+    await chargerLexique();
     const a = H.analyze(txt);
     $('an-resultats').style.display = 'block';
     $('an-score').textContent = 'Conformité : ' + a.score + ' / 100';
@@ -247,5 +374,7 @@
         (v.fixable ? '<span class="badge ok">correction automatique (onglet Humaniser)</span>' : '<span class="badge atten">à la main : ' + echap(conseil(v.id)) + '</span>') + '</td>';
       tbody.appendChild(tr);
     });
+    afficherQualite($('an-qualite'), H.quality(txt));
+    afficherSuggestions($('an-suggestions'), H.suggest(txt), 'Aucun pléonasme ni anglicisme relevé.');
   });
 })();

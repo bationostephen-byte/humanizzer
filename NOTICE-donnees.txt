@@ -1,0 +1,18 @@
+Humanizzer IA Steph : données linguistiques tierces
+====================================================
+
+Le fichier lexique-data.js contient des extraits dérivés de Lexique 3.83 :
+  - exceptions de syllabation (nombre de syllabes),
+  - genre des noms,
+  - formes verbales conjuguées (3e personne : présent, imparfait, futur ; participes).
+
+Source : New, B., Pallier, C., Brysbaert, M., Ferrand, L. (2004).
+         Lexique 2 : A New French Lexical Database.
+         Behavior Research Methods, Instruments, & Computers, 36(3), 516-524.
+         http://www.lexique.org
+
+Licence : Creative Commons Attribution - Partage dans les mêmes conditions 4.0 (CC BY-SA 4.0)
+          https://creativecommons.org/licenses/by-sa/4.0/deed.fr
+
+Ce fichier est une version dérivée : il doit conserver cette mention de source et rester
+distribué sous la même licence. Le reste du code de l'application n'est pas concerné.

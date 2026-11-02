@@ -80,6 +80,15 @@
   .variante { border: 1px solid var(--bord); border-radius: 8px; padding: 10px 12px; margin: 8px 0; background: #fffdf9; }
   .variante .type { font-size: .82rem; color: var(--doux); }
   .variante button { float: right; }
+  .revue { white-space: pre-wrap; line-height: 2; border: 1px solid var(--bord); border-radius: 8px; padding: 12px; background: #fffdf9; }
+  .chg { cursor: pointer; border-radius: 6px; padding: 1px 4px; border: 1px solid transparent; }
+  .chg:focus { outline: 2px solid var(--accent); }
+  .chg.on { background: var(--accent-clair); border-color: var(--accent); }
+  .chg.off { background: #fee2e2; border-color: var(--erreur); }
+  .chg del { color: var(--erreur); }
+  .chg ins { text-decoration: none; color: var(--accent); font-weight: bold; }
+  .chg.off del { color: var(--encre); text-decoration: none; font-weight: bold; }
+  .chg.off ins { color: var(--doux); text-decoration: line-through; font-weight: normal; }
   pre.liste { white-space: pre-wrap; font-family: inherit; margin: 0; }
   .note { font-size: .88rem; color: var(--doux); }
   ol.guide li { margin-bottom: 10px; }
@@ -96,7 +105,7 @@
     <button type="button" data-vue="reformuler">2 · Reformuler</button>
     <button type="button" data-vue="analyser">3 · Analyser</button>
     <button type="button" data-vue="heberger">Hébergement gratuit</button>
-    <button type="button" id="nav-tests">Tests (54)</button>
+    <button type="button" id="nav-tests">Tests</button>
   </nav>
 </header>
 
@@ -126,6 +135,13 @@
   </div>
 
   <div id="hz-resultats" style="display:none">
+    <div class="carte" id="hz-revue-carte">
+      <h2>Relecture modification par modification</h2>
+      <p class="note">Chaque modification est surlignée : <b>vert</b> = acceptée, <b>rouge</b> = refusée. Cliquez dessus (ou Entrée au clavier) pour la refuser ou la rétablir ; le texte corrigé se met à jour. Les modifications collées les unes aux autres sont regroupées.</p>
+      <div class="revue" id="hz-revue"></div>
+      <button type="button" class="action secondaire" id="hz-tout-accepter">Tout accepter</button>
+      <button type="button" class="action secondaire" id="hz-tout-refuser">Tout refuser</button>
+    </div>
     <div class="deux-colonnes">
       <div class="carte">
         <h2>Texte corrigé</h2>
@@ -142,6 +158,7 @@
         <h2>Journal des modifications</h2>
         <div class="journal" id="hz-journal"></div>
         <div id="hz-restants" style="margin-top:10px"></div>
+        <div id="hz-suggestions" style="margin-top:10px"></div>
       </div>
     </div>
   </div>
@@ -205,9 +222,15 @@
       <p class="metriques" id="an-metriques"></p>
       <p class="note">Indice de conformité à vos règles de style. Aucun lien avec un détecteur d'IA.</p>
     </div>
+    <div class="carte" id="an-qualite"></div>
     <div class="carte">
       <h2>Points relevés</h2>
       <table id="an-table"><thead><tr><th>Règle</th><th>Occurrences</th><th>Correction</th></tr></thead><tbody></tbody></table>
+    </div>
+    <div class="carte">
+      <h2>Suggestions de style</h2>
+      <p class="note">Pléonasmes et anglicismes relevés d'après l'Académie française et l'Office québécois de la langue française. Ils ne sont <b>jamais corrigés automatiquement</b> : certains sont admis selon le contexte.</p>
+      <div id="an-suggestions"></div>
     </div>
   </div>
 </section>
@@ -216,17 +239,17 @@
 <section id="vue-heberger" class="vue">
   <div class="carte">
     <h2>Héberger l'application gratuitement, sans API</h2>
-    <p>L'application est un site statique : trois fichiers (HTML, CSS, JS) sans serveur ni base de données. Tout le calcul se fait dans le navigateur du visiteur. Résultat : hébergement gratuit chez plusieurs hébergeurs, aucune clé API, aucun coût, même hors ligne.</p>
+    <p>L'application est un site statique : des fichiers HTML et JavaScript sans serveur ni base de données. Tout le calcul se fait dans le navigateur du visiteur. Résultat : hébergement gratuit chez plusieurs hébergeurs, aucune clé API, aucun coût, même hors ligne.</p>
     <h2>Option A — GitHub Pages (recommandée, permanente)</h2>
     <ol class="guide">
       <li>Créez un compte gratuit sur <b>github.com</b>, puis un nouveau dépôt public (par ex. <i>humanizzer</i>).</li>
-      <li>Uploadez les 5 fichiers : <b>index.html</b>, <b>engine.js</b>, <b>app.js</b>, <b>tests.html</b>, <b>tests.js</b> (bouton « Add file » puis « Upload files »).</li>
+      <li>Uploadez les 9 fichiers : <b>index.html</b>, <b>engine.js</b>, <b>app.js</b>, <b>lexique-data.js</b>, <b>tests.html</b>, <b>tests.js</b>, <b>tests2.js</b>, <b>tests-run.js</b> et <b>NOTICE-donnees.txt</b> (bouton « Add file » puis « Upload files »).</li>
       <li>Allez dans <i>Settings → Pages</i>. Sous « Source », choisissez « Deploy from a branch », branche <b>main</b>, dossier <b>/ (root)</b>, puis Save.</li>
       <li>Attendez 1 à 2 minutes : l'application est en ligne sur <i>https://votre-nom.github.io/humanizzer/</i>. Gratuit à vie, HTTPS inclus.</li>
     </ol>
     <h2>Option B — Netlify Drop (la plus rapide)</h2>
     <ol class="guide">
-      <li>Mettez les 5 fichiers dans un dossier, compressez-le en ZIP.</li>
+      <li>Mettez les 9 fichiers dans un dossier, compressez-le en ZIP.</li>
       <li>Allez sur <b>app.netlify.com/drop</b> et glissez-déposez le ZIP.</li>
       <li>Le site est en ligne en 30 secondes sur une URL fournie. Créez un compte gratuit (pas de carte bancaire) pour garder le site de façon permanente.</li>
     </ol>
@@ -237,6 +260,8 @@
       <li>Site en ligne sur <i>https://humanizzer-….vercel.app</i>.</li>
     </ol>
     <div class="avert">Choisissez UNE option. GitHub Pages est la plus stable pour un usage long terme ; Netlify Drop est la plus rapide pour tester aujourd'hui.</div>
+    <h2>Après une mise à jour</h2>
+    <p>Les navigateurs gardent d'anciens fichiers en cache. Pour forcer le rechargement chez tous les visiteurs, changez le numéro de version dans les lignes <code>engine.js?v=…</code> et <code>app.js?v=…</code> de <b>index.html</b> (et dans <b>tests.html</b>) avant de publier. Pour vérifier votre navigateur, ouvrez l'onglet « Tests » : la page affiche votre navigateur, la version du moteur et le résultat de toutes les vérifications.</p>
     <h2>Utilisation hors ligne</h2>
     <p>Ouvrez simplement <b>index.html</b> en double-cliquant dessus : l'application fonctionne sans internet, les textes ne quittent jamais votre ordinateur.</p>
   </div>
@@ -245,10 +270,11 @@
 </main>
 
 <footer>
+  <p><b>Données linguistiques :</b> syllabes, genre des noms et conjugaison proviennent de <i>Lexique 3.83</i> (New, Pallier, Brysbaert, Ferrand, 2004 ; <a href="http://www.lexique.org">lexique.org</a>), sous licence <a href="https://creativecommons.org/licenses/by-sa/4.0/deed.fr">CC BY-SA 4.0</a>. Le fichier <code>lexique-data.js</code> en est une version dérivée et reste sous cette licence.</p>
   <p><b>Limite assumée :</b> cet outil applique des règles de style et aide à reformuler proprement une source. Il ne fait aucune promesse de résultat face à un détecteur d'IA (Compilatio, Turnitin ou autre), car aucun tel chiffre n'est vérifiable de façon indépendante. Pour un travail académique, la protection réelle est de réécrire vous-même, de citer vos sources et de pouvoir expliquer chaque phrase.</p>
 </footer>
 
-<script src="engine.js"></script>
-<script src="app.js"></script>
+<script src="engine.js?v=1.5.0"></script>
+<script src="app.js?v=1.5.0"></script>
 </body>
 </html>

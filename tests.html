@@ -3,11 +3,12 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Humanizzer IA Steph — suite de tests (54)</title>
+<title>Humanizzer IA Steph : tests dans votre navigateur</title>
 <style>
   body { margin: 0; background: #f6f4ef; color: #1f2933; font-family: Georgia, "Times New Roman", serif; line-height: 1.6; }
   main { max-width: 900px; margin: 0 auto; padding: 24px 20px 60px; }
   h1 { font-size: 1.3rem; }
+  h2 { font-size: 1.05rem; margin-top: 26px; }
   .resume { font-size: 1.1rem; font-weight: bold; margin: 14px 0; padding: 12px 16px; border-radius: 10px; }
   .tout-ok { background: #d9efed; color: #0f766e; }
   .des-echecs { background: #fee2e2; color: #b91c1c; }
@@ -17,57 +18,27 @@
   .ok { color: #0f766e; font-weight: bold; }
   .ko { color: #b91c1c; font-weight: bold; }
   .details { color: #5b6770; font-size: .85rem; }
+  .env { background: #fff; border: 1px solid #e2ddd2; border-radius: 8px; padding: 10px 14px; font-size: .9rem; }
   a { color: #0f766e; }
 </style>
 </head>
 <body>
 <main>
-  <h1>Suite de tests — Humanizzer IA Steph (v1.1.0)</h1>
-  <p>Chaque règle de style, le pipeline complet, la compétence « reformuler » et le contrôle de patchwriting sont vérifiés automatiquement. Cette page peut être ouverte à tout moment pour vérifier que l'application fonctionne après une modification.</p>
+  <h1>Tests de l'application dans <i>votre</i> navigateur</h1>
+  <p>Ces vérifications s'exécutent sur votre appareil : elles confirment que l'application fonctionne chez vous (navigateur, version, dictionnaire). Si un test échoue, copiez son détail et envoyez-le pour diagnostic.</p>
   <p><a href="index.html">← Retour à l'application</a></p>
+  <div id="erreur-moteur" class="resume des-echecs" style="display:none"></div>
+  <div class="env" id="env"></div>
   <div id="resume" class="resume"></div>
-  <table>
-    <thead><tr><th>#</th><th>État</th><th>Test</th><th>Détails</th></tr></thead>
-    <tbody id="corps"></tbody>
-  </table>
+  <h2>Suite 1 : règles de style, reformulation, patchwriting</h2>
+  <table><thead><tr><th>#</th><th>État</th><th>Test</th><th>Détails</th></tr></thead><tbody id="corps1"></tbody></table>
+  <h2>Suite 2 : relecture, syllabes, dictionnaire, voix active et passive</h2>
+  <table><thead><tr><th>#</th><th>État</th><th>Test</th><th>Détails</th></tr></thead><tbody id="corps2"></tbody></table>
 </main>
-<script src="engine.js"></script>
-<script src="tests.js"></script>
-<script>
-  (function () {
-    'use strict';
-    const results = HumanizzerTests.runTests(window.Humanizzer);
-    const nbOk = results.filter((r) => r.pass).length;
-    const resume = document.getElementById('resume');
-    resume.className = 'resume ' + (nbOk === results.length ? 'tout-ok' : 'des-echecs');
-    resume.textContent = nbOk + ' / ' + results.length + ' tests réussis' +
-      (nbOk === results.length ? ' — tout fonctionne.' : ' — des corrections sont nécessaires.');
-
-    const corps = document.getElementById('corps');
-    results.forEach((r, i) => {
-      const tr = document.createElement('tr');
-
-      const tdIndex = document.createElement('td');
-      tdIndex.textContent = String(i + 1);
-
-      const tdStatus = document.createElement('td');
-      tdStatus.className = r.pass ? 'ok' : 'ko';
-      tdStatus.textContent = r.pass ? 'OK' : 'ÉCHEC';
-
-      const tdName = document.createElement('td');
-      tdName.textContent = r.name;
-
-      const tdDetails = document.createElement('td');
-      tdDetails.className = 'details';
-      tdDetails.textContent = r.details || '';
-
-      tr.appendChild(tdIndex);
-      tr.appendChild(tdStatus);
-      tr.appendChild(tdName);
-      tr.appendChild(tdDetails);
-      corps.appendChild(tr);
-    });
-  })();
-</script>
+<script src="engine.js?v=1.5.0"></script>
+<script src="lexique-data.js?v=1.5.0"></script>
+<script src="tests.js?v=1.5.0"></script>
+<script src="tests2.js?v=1.5.0"></script>
+<script src="tests-run.js?v=1.5.0"></script>
 </body>
 </html>
